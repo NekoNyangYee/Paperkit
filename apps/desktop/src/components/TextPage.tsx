@@ -311,6 +311,7 @@ export function TextPage({
       />
       {editingEnabled && !inlineEditing && onGraphicEdit && (
         <GraphicLayer
+          graphicMode={mode === "graphic"}
           textSelected={!!selected}
           key={`${page.fileId}:${page.pageIndex}:${page.state.revision}`}
           page={page}

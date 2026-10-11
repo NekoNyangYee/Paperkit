@@ -284,6 +284,73 @@ fn recognizes_graphics_without_turning_them_into_text() {
             .png,
         resized.png
     );
+    // Moving across existing text must not be treated as a collision. Both
+    // objects remain independently movable and survive saving and reopening.
+    fs::remove_file(saved).unwrap();
+    let saved = path.with_extension("overlap.pdf");
+    let overlap = engine
+        .render("overlap".into(), path.clone(), 0, 600)
+        .unwrap();
+    engine
+        .edit(
+            "overlap".into(),
+            0,
+            EditAction::TransformGraphic {
+                page: 0,
+                object: image.id,
+                matrix: [1., 0., 0., 1., -160., 270.],
+            },
+        )
+        .unwrap();
+    let overlapping = engine
+        .render("overlap".into(), path.clone(), 0, 600)
+        .unwrap();
+    assert_eq!(overlapping.text.objects, overlap.text.objects);
+    let graphic = overlapping
+        .text
+        .graphics
+        .iter()
+        .find(|o| o.id == image.id)
+        .unwrap();
+    assert!((graphic.bounds[0][0] - image.bounds[0][0] + 160.).abs() < 0.1);
+    engine
+        .edit(
+            "overlap".into(),
+            1,
+            EditAction::Move {
+                page: 0,
+                group: None,
+                object: Some(overlap.text.objects[0].id),
+                dx: 20.,
+                dy: -15.,
+            },
+        )
+        .unwrap();
+    let moved_text = engine
+        .render("overlap".into(), path.clone(), 0, 600)
+        .unwrap();
+    assert_eq!(
+        serde_json::to_value(&moved_text.text.graphics).unwrap(),
+        serde_json::to_value(&overlapping.text.graphics).unwrap()
+    );
+    assert_eq!(moved_text.text.objects[0].text.trim(), "Text stays text");
+    engine
+        .edit(
+            "overlap".into(),
+            2,
+            EditAction::Save {
+                path: saved.clone(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        engine
+            .render("overlap-reopened".into(), saved.clone(), 0, 600)
+            .unwrap()
+            .png,
+        moved_text.png
+    );
+    engine.release("overlap".into()).unwrap();
     fs::remove_file(saved).unwrap();
     assert_eq!(fs::read(&path).unwrap(), original);
     engine.release("graphics".into()).unwrap();

@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { Trash2, X } from "lucide-react";
-import type { EditAction, PreviewPage } from "../lib/preview";
+import type { EditAction, PreviewPage, GraphicObject } from "../lib/preview";
 import { graphicBox, graphicTransform, type Box } from "../lib/graphic-transform";
 import { IconButton } from "./ui/icon-button";
 import { MessageDialog } from "./MessageDialog";
@@ -12,8 +12,10 @@ export function GraphicLayer({
   onEdit,
   onSelect,
   textSelected,
+  graphicMode = false,
 }: {
   textSelected?: boolean;
+  graphicMode?: boolean;
   page: PreviewPage;
   disabled: boolean;
   onEdit: (action: EditAction) => Promise<boolean>;
@@ -27,9 +29,14 @@ export function GraphicLayer({
   const [error, setError] = useState<string | null>(null);
   const [committing, setCommitting] = useState(false);
   const root = useRef<HTMLDivElement>(null);
-  const drag = useRef<{ x: number; y: number; box: Box; resize: boolean; ratio: number } | null>(
-    null,
-  );
+  const drag = useRef<{
+    x: number;
+    y: number;
+    box: Box;
+    resize: boolean;
+    ratio: number;
+    object: GraphicObject;
+  } | null>(null);
   const pendingBox = useRef<Box | null>(null);
   const old = selected && graphicBox(selected.screenBounds);
   const box = next ?? old;
@@ -37,13 +44,15 @@ export function GraphicLayer({
     if (textSelected) setId(null);
   }, [textSelected]);
   useEffect(() => {
-    let active = true;
-    setLayers(null);
     setNext(null);
     setCommitting(false);
     setError(null);
     drag.current = null;
     pendingBox.current = null;
+  }, [page]);
+  useEffect(() => {
+    let active = true;
+    setLayers(null);
     if (!selected) return;
     const args = {
       fileId: page.fileId,
@@ -64,8 +73,7 @@ export function GraphicLayer({
       return url;
     }
     void (async () => {
-      const background = await load(false);
-      const foreground = await load(true);
+      const [background, foreground] = await Promise.all([load(false), load(true)]);
       if (active) setLayers({ background, foreground });
     })().catch(() => {
       if (active) setError("객체 이동 미리보기를 준비하지 못했습니다. 다시 선택해 주세요.");
@@ -88,14 +96,29 @@ export function GraphicLayer({
       setError("변경 사항을 반영하지 못했습니다. 다시 시도해 주세요.");
     }
   }
-  function start(event: React.PointerEvent, resize: boolean) {
+  function choose(object: GraphicObject) {
+    if (disabled || committing || id === object.id) return;
+    onSelect();
+    setId(object.id);
+    setNext(null);
+    setError(null);
+  }
+  function start(event: React.PointerEvent, resize: boolean, object = selected) {
     event.stopPropagation();
     event.preventDefault();
-    if (!old || !layers || disabled || committing) return;
+    if (!object || disabled || committing || event.button !== 0) return;
+    choose(object);
     const ratio = (root.current?.getBoundingClientRect().width || page.width) / page.width;
-    drag.current = { x: event.clientX, y: event.clientY, box: old, resize, ratio };
+    drag.current = {
+      x: event.clientX,
+      y: event.clientY,
+      box: graphicBox(object.screenBounds),
+      resize,
+      ratio,
+      object,
+    };
     pendingBox.current = null;
-    event.currentTarget.setPointerCapture(event.pointerId);
+    root.current?.setPointerCapture(event.pointerId);
   }
   function move(event: React.PointerEvent) {
     const d = drag.current;
@@ -117,14 +140,15 @@ export function GraphicLayer({
     setNext(b);
   }
   function end() {
-    if (!drag.current || !selected) return;
+    if (!drag.current) return;
+    const object = drag.current.object;
     drag.current = null;
     const b = pendingBox.current;
     pendingBox.current = null;
     if (!b) return;
-    const matrix = graphicTransform(selected, b);
+    const matrix = graphicTransform(object, b);
     if (matrix)
-      void apply({ kind: "transformGraphic", page: page.pageIndex, object: selected.id, matrix });
+      void apply({ kind: "transformGraphic", page: page.pageIndex, object: object.id, matrix });
     else {
       setNext(null);
       setError("이 객체의 크기나 좌표를 변환할 수 없습니다.");
@@ -142,7 +166,16 @@ export function GraphicLayer({
     setNext(null);
   };
   return (
-    <div ref={root} className="pointer-events-none absolute inset-0 z-[6]">
+    <div
+      ref={root}
+      className="pointer-events-none absolute inset-0 z-[6]"
+      onPointerMove={move}
+      onPointerUp={end}
+      onPointerCancel={cancel}
+      onLostPointerCapture={() => {
+        if (drag.current) cancel();
+      }}
+    >
       {transforming && (
         <>
           <img
@@ -187,20 +220,20 @@ export function GraphicLayer({
               className="cursor-pointer outline-none hover:stroke-blue-400 focus-visible:stroke-blue-500"
               visibility={id === o.id ? "hidden" : undefined}
               style={{
-                pointerEvents: disabled || transforming ? "none" : interior ? "all" : "stroke",
+                pointerEvents:
+                  disabled || transforming ? "none" : interior || graphicMode ? "all" : "stroke",
               }}
+              onPointerDown={(e) => start(e, false, o)}
               onClick={(e) => {
                 e.stopPropagation();
                 if (!disabled && !committing) {
-                  onSelect();
-                  setId(o.id);
+                  choose(o);
                 }
               }}
               onKeyDown={(e) => {
                 if ((e.key === "Enter" || e.key === " ") && !disabled && !committing) {
                   e.preventDefault();
-                  onSelect();
-                  setId(o.id);
+                  choose(o);
                 }
               }}
             />
@@ -214,11 +247,8 @@ export function GraphicLayer({
             tabIndex={0}
             aria-label="선택한 이미지·도형 이동"
             className="pointer-events-auto absolute border-2 border-blue-500"
-            style={{ ...box, cursor: layers ? "move" : "progress", touchAction: "none" }}
+            style={{ ...box, cursor: "move", touchAction: "none" }}
             onPointerDown={(e) => start(e, false)}
-            onPointerMove={move}
-            onPointerUp={end}
-            onPointerCancel={cancel}
             onKeyDown={(e) => {
               if (e.key === "Escape") setId(null);
               if (e.key === "Delete" && !disabled && !committing) {
@@ -232,12 +262,6 @@ export function GraphicLayer({
               className="absolute -bottom-2 -right-2 h-4 w-4 cursor-nwse-resize rounded-sm border-2 border-white bg-blue-600"
               style={{ touchAction: "none" }}
               onPointerDown={(e) => start(e, true)}
-              onPointerMove={move}
-              onPointerUp={(e) => {
-                e.stopPropagation();
-                end();
-              }}
-              onPointerCancel={cancel}
             />
           </div>
           <div

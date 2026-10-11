@@ -1,6 +1,7 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { GraphicLayer } from "./GraphicLayer";
+import { invoke } from "@tauri-apps/api/core";
 import type { PreviewPage } from "../lib/preview";
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn().mockResolvedValue("data:image/png;base64,AA=="),
@@ -60,7 +61,9 @@ it("moves the actual image with a live preview, without an information panel", a
   expect(handle.style.left).toBe("30px");
   expect(handle.style.top).toBe("30px");
   expect(originalHitArea.getAttribute("visibility")).toBe("hidden");
-  expect(screen.getByTestId("moving-graphic").style.transform).toContain("translate(20px,10px)");
+  expect((await screen.findByTestId("moving-graphic")).style.transform).toContain(
+    "translate(20px,10px)",
+  );
   fireEvent.pointerUp(handle);
   await waitFor(() =>
     expect(edit).toHaveBeenCalledWith({
@@ -71,6 +74,29 @@ it("moves the actual image with a live preview, without an information panel", a
     }),
   );
   await waitFor(() => expect(screen.queryByTestId("moving-graphic")).toBeNull());
+});
+it("accepts the first drag before preview preparation and captures across page content", async () => {
+  vi.mocked(invoke).mockImplementationOnce(() => new Promise(() => {}));
+  const edit = vi.fn().mockResolvedValue(false);
+  render(
+    <GraphicLayer page={page} disabled={false} onEdit={edit} onSelect={() => {}} graphicMode />,
+  );
+  expect(screen.getByRole("button", { name: "도형 2 선택" }).style.pointerEvents).toBe("all");
+  const image = screen.getByRole("button", { name: "이미지 1 선택" });
+  fireEvent.pointerDown(image, { clientX: 20, clientY: 30 });
+  fireEvent.pointerMove(image, { clientX: 320, clientY: 430 });
+  const handle = screen.getByRole("button", { name: "선택한 이미지·도형 이동" });
+  expect(handle.style.left).toBe("310px");
+  expect(handle.style.top).toBe("420px");
+  fireEvent.pointerUp(image);
+  await waitFor(() =>
+    expect(edit).toHaveBeenCalledWith({
+      kind: "transformGraphic",
+      page: 0,
+      object: 0,
+      matrix: [1, 0, 0, 1, 300, -400],
+    }),
+  );
 });
 it("resizes and deletes the selected object", async () => {
   const edit = vi.fn().mockResolvedValue(false);
