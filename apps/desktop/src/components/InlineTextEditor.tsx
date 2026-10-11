@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import { editorFont, replacementEditorFont } from "../lib/editor-font";
 import type { TextSelection, TextObject } from "../lib/preview";
 import { readInlineText } from "../lib/inline-layout";
@@ -161,9 +161,11 @@ export function InlineTextEditor({
       disposed = true;
     };
   }, [selected.font]);
-  useEffect(() => {
+  useLayoutEffect(() => {
     const element = input.current;
     if (!element) return;
+    // Populate the editable DOM before it becomes available for input. A passive
+    // effect can run after the first input and overwrite that unsaved draft.
     element.textContent = "";
     if (selected.group && draft === selected.text) {
       const chars = Array.from(draft);

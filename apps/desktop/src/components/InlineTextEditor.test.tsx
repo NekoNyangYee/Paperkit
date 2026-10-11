@@ -1,10 +1,64 @@
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
 import { afterEach, expect, it, vi } from "vitest";
+import { useLayoutEffect } from "react";
 const font = vi.hoisted(() => vi.fn(async (_name, context) => `Font${context.objectId}`));
 vi.mock("../lib/editor-font", () => ({ editorFont: font }));
 import { InlineTextEditor } from "./InlineTextEditor";
 import type { TextObject, TextSelection } from "../lib/preview";
 afterEach(cleanup);
+it("preserves input entered immediately on mount before passive effects run", async () => {
+  const selected: TextObject = {
+    id: 0,
+    text: "Hello World",
+    font: "Helvetica",
+    fontSize: 12,
+    color: [0, 0, 0, 255],
+    matrix: [1, 0, 0, 1, 0, 0],
+    bounds: [
+      [0, 0],
+      [100, 0],
+      [100, 12],
+      [0, 12],
+    ],
+    screenBounds: [
+      [0, 0],
+      [100, 0],
+      [100, 12],
+      [0, 12],
+    ],
+    editBlocked: null,
+    fontChangeBlocked: null,
+  };
+  const onDraft = vi.fn();
+  function ImmediateInput() {
+    useLayoutEffect(() => {
+      const editor = screen.getByRole("textbox");
+      editor.textContent = "Keep this draft";
+      editor.dispatchEvent(new Event("input", { bubbles: true }));
+    }, []);
+    return (
+      <InlineTextEditor
+        selected={selected}
+        objects={[selected]}
+        draft={selected.text}
+        scale={1}
+        disabled={false}
+        point={null}
+        onDraft={onDraft}
+        onApply={vi.fn()}
+        onComposition={vi.fn()}
+        fontContext={{ fileId: "immediate", revision: 0, pageIndex: 0 }}
+        visible
+        onFontsReady={vi.fn()}
+        onFontError={vi.fn()}
+      />
+    );
+  }
+  render(<ImmediateInput />);
+  await waitFor(() => expect(screen.getByRole("textbox").style.fontFamily).toContain("Font0"));
+  expect(onDraft).toHaveBeenLastCalledWith("Keep this draft");
+  expect(screen.getByRole("textbox").textContent).toBe("Keep this draft");
+});
 it("applies the current DOM with Enter, leaves Shift+Enter for line breaks, and protects IME", async () => {
   const selected: TextObject = {
     id: 0,
