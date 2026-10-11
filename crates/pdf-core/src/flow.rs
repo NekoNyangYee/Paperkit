@@ -169,7 +169,9 @@ pub(crate) fn replace_with_fonts(
     let width = width.unwrap_or(
         if !automatic
             || replacement_font.is_some()
-            || source_lines.len() > 1
+            // Separate blocks merged for editing do not define one original
+            // wrapping column. Preserve that column only for a single block.
+            || (selected.len() == 1 && source_lines.len() > 1)
             || alignment != crate::alignment::Alignment::Left
         {
             (area[2] - left).max(12.0)
