@@ -1,0 +1,9 @@
+node_modules/
+.pnpm-store/
+.cache/
+target/
+**/dist/
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/resources/
+pnpm-lock.yaml
+Cargo.lock

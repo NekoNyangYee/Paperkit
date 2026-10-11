@@ -1,0 +1,11 @@
+node_modules/
+dist/
+target/
+.cache/
+.pnpm-store/
+apps/desktop/src-tauri/gen/
+apps/desktop/src-tauri/resources/pdfium/
+apps/desktop/src-tauri/resources/fonts/
+*.local
+.DS_Store
+Thumbs.db

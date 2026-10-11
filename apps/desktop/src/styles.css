@@ -1,0 +1,161 @@
+@import "tailwindcss";
+
+:root {
+  font-family: "Segoe UI", "Malgun Gothic", sans-serif;
+  color: #292524;
+  background: #f5f4f0;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+}
+
+body {
+  margin: 0;
+  min-width: 360px;
+}
+
+@layer base {
+  :where(
+    button,
+    a[href],
+    select,
+    summary,
+    [role="button"],
+    [role="tab"],
+    [role="menuitem"],
+    [role="checkbox"],
+    [role="switch"],
+    input[type="checkbox"],
+    input[type="radio"],
+    input[type="file"]
+  ) {
+    cursor: pointer;
+  }
+  :where(
+    input:not([type]),
+    input[type="text"],
+    input[type="number"],
+    input[type="search"],
+    textarea,
+    [contenteditable="true"],
+    [contenteditable="plaintext-only"]
+  ) {
+    cursor: text;
+  }
+}
+
+/* Disabled actions must override even an explicit move/resize cursor. */
+:where(button, input, select, textarea):disabled,
+[aria-disabled="true"] {
+  cursor: not-allowed;
+}
+
+.dialog-button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  border-radius: 0.5rem;
+  padding: 0.625rem 1rem;
+  font-size: 0.875rem;
+  border: 1px solid #e7e5e4;
+  cursor: pointer;
+}
+.dialog-button:focus-visible {
+  outline: 2px solid #047857;
+  outline-offset: 3px;
+}
+.modal-overlay[data-state="open"] {
+  animation: modal-fade-in 160ms ease-out;
+}
+.modal-overlay[data-state="closed"] {
+  animation: modal-fade-out 140ms ease-in;
+}
+.modal-content[data-state="open"] {
+  animation: modal-in 180ms cubic-bezier(0.2, 0.8, 0.2, 1);
+}
+.modal-content[data-state="closed"] {
+  animation: modal-out 140ms ease-in;
+}
+@keyframes modal-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+.ribbon-group {
+  display: flex;
+  flex-shrink: 0;
+  flex-direction: column;
+  gap: 6px;
+  padding-right: 12px;
+  border-right: 1px solid #e7e5e4;
+}
+
+.ribbon-caption {
+  white-space: nowrap;
+  text-align: center;
+  font-size: 11px;
+  line-height: 16px;
+  color: #78716c;
+}
+
+.ribbon-command {
+  display: inline-flex;
+  min-width: 88px;
+  flex-shrink: 0;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 8px 12px;
+  border-radius: 6px;
+  font-size: 12px;
+  color: #44403c;
+  transition: background-color 150ms;
+}
+
+.ribbon-command:hover:not(:disabled) {
+  background: #ecfdf5;
+}
+
+.ribbon-command:focus-visible {
+  outline: 2px solid #047857;
+  outline-offset: 2px;
+}
+
+.ribbon-command:disabled {
+  opacity: 0.35;
+}
+
+@keyframes modal-fade-out {
+  to {
+    opacity: 0;
+  }
+}
+@keyframes modal-in {
+  from {
+    opacity: 0;
+    scale: 0.98;
+  }
+  to {
+    opacity: 1;
+    scale: 1;
+  }
+}
+@keyframes modal-out {
+  to {
+    opacity: 0;
+    scale: 0.98;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .modal-overlay,
+  .modal-content {
+    animation: none !important;
+  }
+  .sidebar-shell {
+    transition: none !important;
+  }
+}

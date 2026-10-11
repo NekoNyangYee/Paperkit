@@ -1,0 +1,32 @@
+{
+  "name": "paperkit",
+  "version": "0.1.0",
+  "private": true,
+  "packageManager": "pnpm@10.28.1",
+  "engines": {
+    "node": ">=22.14.0",
+    "pnpm": ">=10 <11"
+  },
+  "scripts": {
+    "format": "prettier --write . --ignore-unknown && cargo fmt --all",
+    "format:check": "prettier --check . --ignore-unknown && cargo fmt --all -- --check",
+    "test:corpus": "node scripts/test-native.mjs corpus_smoke",
+    "test:layout": "cargo test -p pdf-core --test layout_smoke -- --ignored --nocapture",
+    "setup:fonts": "node scripts/setup-fonts.mjs",
+    "test:fonts": "node scripts/test-native.mjs fonts_smoke",
+    "setup:pdfium": "node scripts/setup-pdfium.mjs",
+    "test:pdfium": "cargo test -p pdf-core --test pdfium_smoke -- --ignored",
+    "test:web": "pnpm --filter @paperkit/desktop test",
+    "dev": "pnpm --filter @paperkit/desktop tauri dev",
+    "dev:web": "pnpm --filter @paperkit/desktop dev",
+    "build": "pnpm --filter @paperkit/desktop tauri build",
+    "build:web": "pnpm --filter @paperkit/desktop build",
+    "typecheck": "pnpm --filter @paperkit/desktop typecheck",
+    "check:rust": "cargo check --workspace",
+    "test:rust": "cargo test --workspace",
+    "fmt:rust": "cargo fmt --all -- --check"
+  },
+  "devDependencies": {
+    "prettier": "3.9.10"
+  }
+}

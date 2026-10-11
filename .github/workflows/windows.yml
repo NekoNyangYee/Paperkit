@@ -1,0 +1,122 @@
+name: Windows CI and Release
+
+on:
+  pull_request:
+  push:
+    branches: [main, master]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: ${{ !startsWith(github.ref, 'refs/tags/') }}
+
+jobs:
+  build:
+    runs-on: windows-2022
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: pwsh
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: pnpm/action-setup@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: pnpm
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt
+      - uses: Swatinem/rust-cache@v2
+      - uses: actions/cache@v4
+        with:
+          path: .cache
+          key: native-windows-x64-${{ hashFiles('scripts/*manifest.json') }}
+      - name: Install JavaScript dependencies
+        run: pnpm install --frozen-lockfile
+      - name: Check versions and release tag
+        env:
+          RELEASE_TAG: ${{ startsWith(github.ref, 'refs/tags/') && github.ref_name || '' }}
+        run: node scripts/version.mjs
+      - name: Version tooling tests
+        run: node --test scripts/version.test.mjs
+      - name: Download and verify native resources
+        run: |
+          pnpm setup:pdfium
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          pnpm setup:fonts
+      - name: Format check
+        run: pnpm format:check
+      - name: Frontend tests
+        run: pnpm test:web
+      - name: Rust tests
+        run: cargo test --workspace --locked
+      - name: PDFium integration
+        run: pnpm test:pdfium
+      - name: PDF edit, movement and alignment integration
+        run: pnpm test:corpus
+      - name: Original font recovery integration
+        run: cargo test -p pdf-core --locked recovers_embedded_cmap_and_edits_without_installed_original -- --ignored --nocapture
+      - name: Font change and save integration
+        run: cargo test -p pdf-core --locked --test fonts_smoke block_font_change_reflows_beyond_original_height_and_saves -- --ignored --nocapture
+      - name: Build Windows installer
+        run: pnpm --filter @paperkit/desktop tauri build --ci --bundles nsis -- --locked
+      - name: Installer checksum
+        run: |
+          $installers = @(Get-ChildItem -LiteralPath target/release/bundle/nsis -Filter '*-setup.exe')
+          if ($installers.Count -ne 1) { throw 'Expected exactly one NSIS installer.' }
+          $installerHash = (Get-FileHash -LiteralPath $installers[0].FullName -Algorithm SHA256).Hash.ToLowerInvariant()
+          "$installerHash  $($installers[0].Name)" | Set-Content -LiteralPath target/release/bundle/nsis/SHA256SUMS.txt -Encoding utf8
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Paperkit-Windows-x64
+          path: |
+            target/release/bundle/nsis/*-setup.exe
+            target/release/bundle/nsis/SHA256SUMS.txt
+          if-no-files-found: error
+          retention-days: 14
+
+  release:
+    needs: build
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'NekoNyangYee/pdf-editor'
+    runs-on: windows-2022
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: Paperkit-Windows-x64
+          path: release-assets
+      - name: Publish verified installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          if ($env:RELEASE_TAG -notmatch '^v(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)$') { throw 'Invalid stable release tag.' }
+          gh release view $env:RELEASE_TAG --json tagName 2>$null
+          if ($LASTEXITCODE -eq 0) { throw 'Release already exists; existing assets will not be overwritten.' }
+          $assets = @(Get-ChildItem -LiteralPath release-assets -File | ForEach-Object FullName)
+          if ($assets.Count -ne 2) { throw 'Installer or checksum is missing.' }
+          @'
+          Windows x64용 Paperkit 설치 파일입니다.
+
+          - `*-setup.exe`를 내려받아 설치하세요.
+          - PDFium과 편집용 글꼴·라이선스가 설치 파일에 포함됩니다.
+          - `SHA256SUMS.txt`로 파일 무결성을 확인할 수 있습니다.
+          - 앱의 버전 확인 창에서 이 정식 릴리즈를 조회합니다.
+          '@ | Set-Content -LiteralPath release-notes.md -Encoding utf8
+          gh release create $env:RELEASE_TAG @assets --verify-tag --draft --title "Paperkit $env:RELEASE_TAG" --notes-file release-notes.md
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+          gh release edit $env:RELEASE_TAG --draft=false --latest
+          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
