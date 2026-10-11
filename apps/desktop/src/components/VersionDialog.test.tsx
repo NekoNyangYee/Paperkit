@@ -24,12 +24,12 @@ it("shows installed version and a new release without rendering remote HTML", as
       ok: true,
       json: async () => ({
         tag_name: "v0.2.0",
-        body: "# Release notes\n\n## Changes\n\n- **Fixed** editing\n- [Details](https://github.com/NekoNyangYee/pdf-editor/releases)\n\n<b>Raw HTML</b>\n\n[unsafe](javascript:alert(1))",
+        body: "# Release notes\n\n## Changes\n\n- **Fixed** editing\n- [Details](https://github.com/NekoNyangYee/Paperkit/releases)\n\n<b>Raw HTML</b>\n\n[unsafe](javascript:alert(1))",
         assets: [
           {
             name: "Paperkit_0.2.0_x64-setup.exe",
             browser_download_url:
-              "https://github.com/NekoNyangYee/pdf-editor/releases/download/v0.2.0/Paperkit_0.2.0_x64-setup.exe",
+              "https://github.com/NekoNyangYee/Paperkit/releases/download/v0.2.0/Paperkit_0.2.0_x64-setup.exe",
           },
         ],
       }),
@@ -41,7 +41,7 @@ it("shows installed version and a new release without rendering remote HTML", as
   expect(screen.getByRole("img", { name: "Paperkit 로고" })).toBeTruthy();
   fireEvent.click(screen.getByRole("button", { name: "GitHub 저장소 열기" }));
   await waitFor(() =>
-    expect(openUrl).toHaveBeenCalledWith("https://github.com/NekoNyangYee/pdf-editor"),
+    expect(openUrl).toHaveBeenCalledWith("https://github.com/NekoNyangYee/Paperkit"),
   );
   await screen.findByText(/새 버전이 있습니다/);
   expect(screen.getByRole("heading", { name: "Release notes", level: 1 })).toBeTruthy();
@@ -51,7 +51,7 @@ it("shows installed version and a new release without rendering remote HTML", as
   expect(screen.queryByRole("link", { name: "unsafe" })).toBeNull();
   fireEvent.click(screen.getByRole("link", { name: "Details" }));
   await waitFor(() =>
-    expect(openUrl).toHaveBeenCalledWith("https://github.com/NekoNyangYee/pdf-editor/releases"),
+    expect(openUrl).toHaveBeenCalledWith("https://github.com/NekoNyangYee/Paperkit/releases"),
   );
   expect(screen.queryByRole("textbox")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "업데이트" }));
@@ -87,7 +87,7 @@ it("shows download progress, prevents duplicate requests and offers retry on fai
           {
             name: "Paperkit_0.2.0_x64-setup.exe",
             browser_download_url:
-              "https://github.com/NekoNyangYee/pdf-editor/releases/download/v0.2.0/Paperkit_0.2.0_x64-setup.exe",
+              "https://github.com/NekoNyangYee/Paperkit/releases/download/v0.2.0/Paperkit_0.2.0_x64-setup.exe",
           },
         ],
       }),

@@ -1,13 +1,13 @@
 # Windows CI / GitHub Release
 
-대상 저장소: `NekoNyangYee/pdf-editor`. 현재 지원하는 네이티브 배포 대상은 Windows x64다.
+대상 저장소: `NekoNyangYee/Paperkit`. 현재 지원하는 네이티브 배포 대상은 Windows x64다.
 
 ## 실행 흐름
 
 - PR, main/master push, 수동 실행: 버전 일치 → PDFium·글꼴 SHA-256 검증 → 포맷·프론트·Rust 테스트 → 네이티브 편집 테스트 → NSIS 설치 파일 빌드 → Actions artifact 보관(14일).
 - `vX.Y.Z` 태그 push: 위 검사를 모두 통과한 설치 파일과 SHA256SUMS.txt를 GitHub Release에 첨부하고 정식 게시한다. 게시 전 임시 draft 단계가 있다. 같은 태그의 기존 릴리즈는 덮어쓰지 않는다.
 - PR에는 쓰기 권한이 없고, 릴리즈 작업만 `contents: write`를 사용한다. 별도 PAT 없이 GitHub의 `GITHUB_TOKEN`을 사용한다.
-- 앱 버전 확인 창은 이 저장소의 최신 **정식** 릴리즈를 조회한다. v0.2.1부터 앱 내 다운로드·검증과 재시작 설치를 지원한다. [업데이트 동작](in-app-updates.md)을 참고한다.
+- 앱 버전 확인 창은 이 저장소의 최신 **정식** 릴리즈를 조회한다. v0.2.2부터 앱 내 다운로드·검증과 재시작 설치를 지원한다. [업데이트 동작](in-app-updates.md)을 참고한다.
 
 ## 릴리즈 절차
 

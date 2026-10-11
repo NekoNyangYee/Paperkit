@@ -8,7 +8,7 @@ use std::{
 };
 use tauri::{ipc::Channel, Manager};
 
-const BASE: &str = "https://github.com/NekoNyangYee/pdf-editor/releases/download";
+const BASE: &str = "https://github.com/NekoNyangYee/Paperkit/releases/download";
 const LIMIT: u64 = 256 * 1024 * 1024;
 
 struct Prepared {

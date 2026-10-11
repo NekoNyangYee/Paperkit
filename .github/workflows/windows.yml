@@ -87,7 +87,7 @@ jobs:
 
   release:
     needs: build
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'NekoNyangYee/pdf-editor'
+    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') && github.repository == 'NekoNyangYee/Paperkit'
     runs-on: windows-2022
     timeout-minutes: 10
     permissions:

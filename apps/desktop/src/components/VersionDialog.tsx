@@ -45,7 +45,7 @@ export function VersionDialog() {
     try {
       if (isTauri()) setVersion(await getVersion());
       if (controller.signal.aborted) return;
-      const result = await latestRelease("NekoNyangYee/pdf-editor", controller.signal);
+      const result = await latestRelease("NekoNyangYee/Paperkit", controller.signal);
       if (pending.current !== controller) return;
       setRelease(result);
     } catch (cause) {
@@ -89,7 +89,7 @@ export function VersionDialog() {
                 className="inline-flex size-10 items-center justify-center rounded-lg text-stone-600 hover:bg-stone-100"
                 onClick={async () => {
                   try {
-                    await openUrl("https://github.com/NekoNyangYee/pdf-editor");
+                    await openUrl("https://github.com/NekoNyangYee/Paperkit");
                   } catch {
                     setError("GitHub 저장소를 열지 못했습니다.");
                   }
@@ -210,7 +210,7 @@ export function VersionDialog() {
                     a: ({ href, children }) => {
                       let url: URL;
                       try {
-                        url = new URL(href ?? "", "https://github.com/NekoNyangYee/pdf-editor/");
+                        url = new URL(href ?? "", "https://github.com/NekoNyangYee/Paperkit/");
                       } catch {
                         return <span>{children}</span>;
                       }

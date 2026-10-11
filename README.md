@@ -19,7 +19,7 @@ Paperkit은 PDF의 텍스트, 이미지, 도형을 페이지 위에서 직접 �
 
 ## 시작하기
 
-1. [최신 릴리즈](https://github.com/NekoNyangYee/pdf-editor/releases/latest)에서 Windows 설치 파일을 다운로드합니다.
+1. [최신 릴리즈](https://github.com/NekoNyangYee/Paperkit/releases/latest)에서 Windows 설치 파일을 다운로드합니다.
 2. Paperkit을 실행하고 PDF를 열거나 창에 끌어 놓습니다.
 3. **편집 사용**을 누른 뒤 텍스트를 더블 클릭하거나 이미지·도형을 선택합니다.
 4. 작업을 마치면 **새 PDF로 저장**합니다.
@@ -42,6 +42,6 @@ PDF는 문서마다 내부 구조가 달라 편집 가능한 범위에 차이가
 
 - [개발 환경과 실행 방법](docs/development.md)
 - [개발 체크리스트](docs/development-checklist.md)
-- [오류 제보 및 기능 제안](https://github.com/NekoNyangYee/pdf-editor/issues)
+- [오류 제보 및 기능 제안](https://github.com/NekoNyangYee/Paperkit/issues)
 
 Tauri, React, TypeScript, Rust, PDFium으로 만들었습니다.
