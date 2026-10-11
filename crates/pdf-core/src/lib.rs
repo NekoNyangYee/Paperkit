@@ -8,6 +8,7 @@ pub mod edit;
 mod flow;
 mod font_recovery;
 pub mod fonts;
+mod graphics;
 pub mod layout;
 mod movement;
 pub mod render;

@@ -19,28 +19,38 @@ interface AppStore {
   openFile: () => void;
   initialize: () => Promise<void>;
   receive: (paths: string[]) => Promise<void>;
+  replaceFile: (paths: string[]) => Promise<void>;
   clear: () => Promise<void>;
   reportError: (cause: unknown) => void;
 }
 
 // Rust owns the selection. Zustand only mirrors serialized snapshots.
 export const useAppStore = create<AppStore>((set, get) => {
-  const apply = (result: SelectionSnapshot) =>
+  const apply = (result: SelectionSnapshot, openImmediately = false) =>
     set({
       file: result.file,
       revision: result.revision,
-      openedFileId: result.file?.id === get().openedFileId ? get().openedFileId : null,
+      openedFileId:
+        openImmediately && !result.error && result.file
+          ? result.file.id
+          : result.file?.id === get().openedFileId
+            ? get().openedFileId
+            : null,
       phase: result.error ? "error" : result.file ? "selected" : "idle",
       error: result.error,
     });
-  const run = async (operation: "check" | "clear", paths: string[] = []) => {
+  const run = async (
+    operation: "check" | "clear",
+    paths: string[] = [],
+    openImmediately = false,
+  ) => {
     if (!get().ready) return;
     const revision = get().revision + 1;
     set({ revision, phase: operation === "check" ? "checking" : "clearing", error: null });
     try {
       const result =
         operation === "check" ? await inspectFile(paths, revision) : await clearSelection(revision);
-      if (get().revision === revision) apply(result);
+      if (get().revision === revision) apply(result, openImmediately);
     } catch (cause) {
       if (get().revision === revision) set({ phase: "error", error: errorMessage(cause) });
     }
@@ -69,6 +79,7 @@ export const useAppStore = create<AppStore>((set, get) => {
       }
     },
     receive: (paths) => run("check", paths),
+    replaceFile: (paths) => run("check", paths, true),
     clear: () => run("clear"),
     reportError: (cause) => set({ error: errorMessage(cause), phase: "error" }),
   };

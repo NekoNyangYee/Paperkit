@@ -16,6 +16,15 @@ pub struct EditState {
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum EditAction {
+    TransformGraphic {
+        page: i32,
+        object: usize,
+        matrix: [f32; 6],
+    },
+    DeleteGraphic {
+        page: i32,
+        object: usize,
+    },
     AlignBlock {
         page: i32,
         groups: Vec<usize>,
@@ -195,7 +204,9 @@ impl History {
                 crate::save::save_new(pdfium, document, self.bytes.as_ref().unwrap(), &path)?;
                 self.saved = self.bytes.clone();
             }
-            action @ (EditAction::AlignBlock { .. }
+            action @ (EditAction::TransformGraphic { .. }
+            | EditAction::DeleteGraphic { .. }
+            | EditAction::AlignBlock { .. }
             | EditAction::Replace { .. }
             | EditAction::FlexibleEdit { .. }
             | EditAction::Move { .. }
@@ -207,6 +218,24 @@ impl History {
             | EditAction::ChangeBlockFont { .. }
             | EditAction::ReplaceGroup { .. }) => {
                 let bytes = match action {
+                    EditAction::TransformGraphic {
+                        page,
+                        object,
+                        matrix,
+                    } => crate::graphics::edit(
+                        pdfium,
+                        self.bytes.as_ref().unwrap(),
+                        page,
+                        object,
+                        Some(matrix),
+                    )?,
+                    EditAction::DeleteGraphic { page, object } => crate::graphics::edit(
+                        pdfium,
+                        self.bytes.as_ref().unwrap(),
+                        page,
+                        object,
+                        None,
+                    )?,
                     EditAction::AlignBlock {
                         page,
                         groups,

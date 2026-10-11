@@ -1,6 +1,6 @@
 {
   "name": "@paperkit/desktop",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "private": true,
   "type": "module",
   "scripts": {
@@ -21,7 +21,9 @@
     "lucide-react": "^1.55.0",
     "react": "^19.3.0",
     "react-dom": "^19.3.0",
+    "react-markdown": "^10.1.0",
     "react-moveable": "0.56.0",
+    "remark-gfm": "^4.0.1",
     "tailwind-merge": "^3.7.0",
     "zustand": "^5.0.0"
   },

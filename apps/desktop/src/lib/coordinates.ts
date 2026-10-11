@@ -1,7 +1,11 @@
 import type { TextObject } from "./preview";
 
 // Solve the rendered quad's two axes, including page rotation and zoom.
-export function pdfDelta(object: TextObject, x: number, y: number): [number, number] | null {
+export function pdfDelta(
+  object: Pick<TextObject, "bounds" | "screenBounds">,
+  x: number,
+  y: number,
+): [number, number] | null {
   const [p, q, , r] = object.screenBounds;
   const ax = q[0] - p[0],
     ay = q[1] - p[1],

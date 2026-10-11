@@ -68,7 +68,8 @@ jobs:
       - name: Font change and save integration
         run: cargo test -p pdf-core --locked --test fonts_smoke block_font_change_reflows_beyond_original_height_and_saves -- --ignored --nocapture
       - name: Build Windows installer
-        run: pnpm --filter @paperkit/desktop tauri build --ci --bundles nsis -- --locked
+        working-directory: apps/desktop
+        run: node node_modules/@tauri-apps/cli/tauri.js build --ci --bundles nsis -- --locked
       - name: Installer checksum
         run: |
           $installers = @(Get-ChildItem -LiteralPath target/release/bundle/nsis -Filter '*-setup.exe')

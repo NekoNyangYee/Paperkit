@@ -22,8 +22,63 @@ pub struct TextObject {
 #[serde(rename_all = "camelCase")]
 pub struct PageText {
     pub objects: Vec<TextObject>,
+    pub graphics: Vec<GraphicObject>,
     pub groups: Vec<crate::layout::TextGroup>,
     pub warning: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct GraphicObject {
+    pub id: usize,
+    pub kind: &'static str,
+    pub bounds: [[f32; 2]; 4],
+    pub screen_bounds: [[i32; 2]; 4],
+}
+
+fn extract_graphics(page: &PdfPage<'_>, config: &PdfRenderConfig) -> Vec<GraphicObject> {
+    page.objects()
+        .iter()
+        .enumerate()
+        .filter_map(|(id, object)| {
+            let kind = if object.as_image_object().is_some() {
+                "image"
+            } else if object.as_path_object().is_some() {
+                "path"
+            } else if object.as_shading_object().is_some() {
+                "shading"
+            } else if object.as_x_object_form_object().is_some() {
+                "form"
+            } else {
+                return None;
+            };
+            let q = object.bounds().ok()?;
+            let mut bounds = [[0.0; 2]; 4];
+            let mut screen_bounds = [[0; 2]; 4];
+            for (i, (x, y)) in [
+                (q.x1(), q.y1()),
+                (q.x2(), q.y2()),
+                (q.x3(), q.y3()),
+                (q.x4(), q.y4()),
+            ]
+            .into_iter()
+            .enumerate()
+            {
+                if !x.value.is_finite() || !y.value.is_finite() {
+                    return None;
+                }
+                bounds[i] = [x.value, y.value];
+                let (px, py) = page.points_to_pixels(x, y, config).ok()?;
+                screen_bounds[i] = [px, py];
+            }
+            Some(GraphicObject {
+                id,
+                kind,
+                bounds,
+                screen_bounds,
+            })
+        })
+        .collect()
 }
 
 pub(crate) fn extract(
@@ -60,8 +115,14 @@ fn extract_impl(
             ..Default::default()
         };
     }
+    let graphics = if prepare_fonts {
+        extract_graphics(page, config)
+    } else {
+        Vec::new()
+    };
     let Ok(text_page) = page.text() else {
         return PageText {
+            graphics,
             warning: Some("텍스트 정보를 읽지 못했습니다.".into()),
             ..Default::default()
         };
@@ -71,7 +132,10 @@ fn extract_impl(
         .can_modify_document_content()
         .unwrap_or(false)
         && document.signatures().is_empty();
-    let mut result = PageText::default();
+    let mut result = PageText {
+        graphics,
+        ..Default::default()
+    };
     let mut font_bytes = std::collections::HashMap::new();
     let mut font_objects = std::collections::HashMap::new();
     for (id, object) in page.objects().iter().enumerate() {

@@ -40,7 +40,13 @@ export type TextSelection = TextObject & {
   originalAlignment?: Alignment;
   editFonts?: Record<number, string>;
 };
-export type SelectionMode = "sentence" | "paragraph" | "object";
+export type SelectionMode = "sentence" | "paragraph" | "object" | "graphic";
+export interface GraphicObject {
+  id: number;
+  kind: "image" | "path" | "shading" | "form";
+  bounds: number[][];
+  screenBounds: number[][];
+}
 export function groupSelection(group: TextGroup, objects: TextObject[]): TextSelection | null {
   const sources = group.runs.map((run) => objects.find((o) => o.id === run.object));
   const first = sources[0];
@@ -72,6 +78,8 @@ export function groupSelection(group: TextGroup, objects: TextObject[]): TextSel
   };
 }
 export type EditAction =
+  | { kind: "transformGraphic"; page: number; object: number; matrix: number[] }
+  | { kind: "deleteGraphic"; page: number; object: number }
   | {
       kind: "alignBlock";
       font?: string;
@@ -224,7 +232,12 @@ export interface PreviewPage {
   height: number;
   imageUrl: string;
   state: EditState;
-  text: { objects: TextObject[]; groups?: TextGroup[]; warning: string | null };
+  text: {
+    objects: TextObject[];
+    graphics?: GraphicObject[];
+    groups?: TextGroup[];
+    warning: string | null;
+  };
 }
 
 export async function renderPage(

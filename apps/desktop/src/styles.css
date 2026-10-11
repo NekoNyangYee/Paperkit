@@ -1,5 +1,86 @@
 @import "tailwindcss";
 
+.release-notes {
+  line-height: 1.75;
+  overflow-wrap: anywhere;
+}
+.release-notes > :first-child {
+  margin-top: 0;
+}
+.release-notes h1,
+.release-notes h2,
+.release-notes h3,
+.release-notes h4,
+.release-notes h5,
+.release-notes h6 {
+  margin: 1.1em 0 0.5em;
+  font-weight: 650;
+  line-height: 1.4;
+}
+.release-notes h1 {
+  font-size: 1.25rem;
+}
+.release-notes h2 {
+  font-size: 1.1rem;
+}
+.release-notes p,
+.release-notes ul,
+.release-notes ol,
+.release-notes pre {
+  margin: 0.7em 0;
+}
+.release-notes ul {
+  list-style: disc;
+  padding-left: 1.4em;
+}
+.release-notes ol {
+  list-style: decimal;
+  padding-left: 1.4em;
+}
+.release-notes li + li {
+  margin-top: 0.25em;
+}
+.release-notes a {
+  color: #047857;
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+.release-notes code {
+  border-radius: 4px;
+  background: #f5f5f4;
+  padding: 0.1em 0.3em;
+  font-size: 0.9em;
+}
+.release-notes pre {
+  overflow-x: auto;
+  border-radius: 8px;
+  background: #f5f5f4;
+  padding: 0.75em;
+}
+.release-notes pre code {
+  padding: 0;
+}
+.release-notes blockquote {
+  border-left: 3px solid #d6d3d1;
+  padding-left: 1em;
+  color: #57534e;
+}
+.release-notes table {
+  display: block;
+  overflow-x: auto;
+  border-collapse: collapse;
+}
+.release-notes th,
+.release-notes td {
+  border: 1px solid #d6d3d1;
+  padding: 0.4em 0.7em;
+  text-align: left;
+}
+.release-notes hr {
+  margin: 1em 0;
+  border-color: #e7e5e4;
+}
+
 :root {
   font-family: "Segoe UI", "Malgun Gothic", sans-serif;
   color: #292524;

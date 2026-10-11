@@ -28,6 +28,7 @@ pub enum PreviewError {
     TextOverflow,
     PageOverflow,
     VerificationFailed,
+    UnchangedTextModified,
     NoHistory,
     SaveFailed,
     TargetExists,
@@ -144,15 +145,10 @@ impl PreviewEngine {
                                 objects.sort_unstable();
                                 objects.dedup();
                                 for &id in &objects {
-                                    if target
+                                    target
                                         .objects()
                                         .get(id)
-                                        .map_err(|_| PreviewError::StaleObject)?
-                                        .as_text_object()
-                                        .is_none()
-                                    {
-                                        return Err(PreviewError::UnsupportedText);
-                                    }
+                                        .map_err(|_| PreviewError::StaleObject)?;
                                 }
                                 let remove: Vec<_> = if foreground {
                                     (0..target.objects().len())
@@ -375,7 +371,7 @@ impl PreviewEngine {
         }
         let (reply, receiver) = mpsc::sync_channel(1);
         self.sender
-            .try_send(Request::Font {
+            .send(Request::Font {
                 id,
                 revision,
                 page,
@@ -383,10 +379,7 @@ impl PreviewEngine {
                 value,
                 reply,
             })
-            .map_err(|e| match e {
-                mpsc::TrySendError::Full(_) => PreviewError::Busy,
-                _ => PreviewError::WorkerStopped,
-            })?;
+            .map_err(|_| PreviewError::WorkerStopped)?;
         receiver.recv().map_err(|_| PreviewError::WorkerStopped)?
     }
 
@@ -399,16 +392,13 @@ impl PreviewEngine {
     ) -> Result<EditState, PreviewError> {
         let (reply, receiver) = mpsc::sync_channel(1);
         self.sender
-            .try_send(Request::Edit {
+            .send(Request::Edit {
                 id,
                 revision,
                 action,
                 reply,
             })
-            .map_err(|error| match error {
-                mpsc::TrySendError::Full(_) => PreviewError::Busy,
-                mpsc::TrySendError::Disconnected(_) => PreviewError::WorkerStopped,
-            })?;
+            .map_err(|_| PreviewError::WorkerStopped)?;
         receiver.recv().map_err(|_| PreviewError::WorkerStopped)?
     }
 
@@ -425,17 +415,14 @@ impl PreviewEngine {
         }
         let (reply, receiver) = mpsc::sync_channel(1);
         self.sender
-            .try_send(Request::Render {
+            .send(Request::Render {
                 id,
                 path,
                 page,
                 width,
                 reply,
             })
-            .map_err(|error| match error {
-                mpsc::TrySendError::Full(_) => PreviewError::Busy,
-                mpsc::TrySendError::Disconnected(_) => PreviewError::WorkerStopped,
-            })?;
+            .map_err(|_| PreviewError::WorkerStopped)?;
         receiver.recv().map_err(|_| PreviewError::WorkerStopped)?
     }
 
@@ -458,6 +445,46 @@ fn render_page(
 #[cfg(test)]
 mod queue_tests {
     use super::*;
+
+    #[test]
+    fn render_font_and_edit_wait_for_queue_capacity() {
+        for kind in 0..3 {
+            let (sender, receiver) = mpsc::sync_channel(1);
+            sender.send(Request::Release("occupied".into())).unwrap();
+            let engine = PreviewEngine { sender };
+            let (done, completed) = mpsc::channel();
+            let worker = std::thread::spawn(move || {
+                let result = match kind {
+                    0 => engine
+                        .render("document".into(), PathBuf::new(), 0, 800)
+                        .map(|_| ()),
+                    1 => engine.font("document".into(), 0, 0, 0).map(|_| ()),
+                    _ => engine
+                        .edit("document".into(), 0, EditAction::Undo)
+                        .map(|_| ()),
+                };
+                done.send(result).unwrap();
+            });
+            assert_eq!(
+                completed.recv_timeout(std::time::Duration::from_millis(100)),
+                Err(mpsc::RecvTimeoutError::Timeout)
+            );
+            assert!(matches!(receiver.recv().unwrap(), Request::Release(_)));
+            match receiver
+                .recv_timeout(std::time::Duration::from_secs(2))
+                .unwrap()
+            {
+                Request::Render { reply, .. } => {
+                    reply.send(Err(PreviewError::RenderFailed)).unwrap()
+                }
+                Request::Font { reply, .. } => reply.send(Err(PreviewError::RenderFailed)).unwrap(),
+                Request::Edit { reply, .. } => reply.send(Err(PreviewError::RenderFailed)).unwrap(),
+                _ => panic!("unexpected request"),
+            }
+            assert_eq!(completed.recv().unwrap(), Err(PreviewError::RenderFailed));
+            worker.join().unwrap();
+        }
+    }
 
     #[test]
     fn editing_layer_waits_for_queue_capacity() {

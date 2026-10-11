@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { groupSelection } from "../lib/preview";
-import type { PreviewPage, TextSelection, SelectionMode } from "../lib/preview";
+import type { PreviewPage, TextSelection, SelectionMode, EditAction } from "../lib/preview";
 import { InlineTextEditor } from "./InlineTextEditor";
 import { pdfDelta } from "../lib/coordinates";
 import { mergeSelection } from "../lib/merge-selection";
@@ -9,6 +9,7 @@ import Moveable, { type Requester } from "react-moveable";
 import { Move, Trash2, Combine, X } from "lucide-react";
 import { IconButton } from "./ui/icon-button";
 import { MessageDialog } from "./MessageDialog";
+import { GraphicLayer } from "./GraphicLayer";
 
 async function decodedLayer(data: string) {
   if (typeof data !== "string" || !data.startsWith("data:image/png;base64,"))
@@ -40,6 +41,7 @@ export function TextPage({
   onDelete,
   blockSize,
   onResize,
+  onGraphicEdit,
 }: {
   fontGeneration?: number;
   page: PreviewPage;
@@ -59,6 +61,7 @@ export function TextPage({
   onDelete: (target: TextSelection) => void;
   blockSize: { width: number; height: number } | null;
   onResize: (size: { width: number; height: number }) => void;
+  onGraphicEdit?: (action: EditAction) => Promise<boolean>;
 }) {
   const point = useRef<{ x: number; y: number } | null>(null);
   const lastClick = useRef<{ id: number; x: number; y: number; time: number } | null>(null);
@@ -306,6 +309,16 @@ export function TextPage({
         height={page.height}
         alt={`${name} · ${page.pageIndex + 1}페이지`}
       />
+      {editingEnabled && !inlineEditing && onGraphicEdit && (
+        <GraphicLayer
+          textSelected={!!selected}
+          key={`${page.fileId}:${page.pageIndex}:${page.state.revision}`}
+          page={page}
+          disabled={disabled}
+          onEdit={onGraphicEdit}
+          onSelect={() => onSelect(null)}
+        />
+      )}
       {moving && (
         <img
           data-testid="moving-text"
@@ -357,7 +370,7 @@ export function TextPage({
           ))}
         </svg>
       )}
-      {editingEnabled && (
+      {editingEnabled && mode !== "graphic" && (
         <svg
           className="absolute inset-0"
           width={page.width}

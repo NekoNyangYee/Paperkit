@@ -1,4 +1,3 @@
-import { VersionDialog } from "./VersionDialog";
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isTauri, invoke } from "@tauri-apps/api/core";
@@ -104,8 +103,6 @@ export function PdfPreview({ file }: { file: FileInfo }) {
   useEffect(() => {
     const area = pageArea.current;
     if (!area) return;
-    let timer: ReturnType<typeof setTimeout>;
-    let delta = 0;
     const wheel = (event: WheelEvent) => {
       // Only Ctrl+wheel zooms; ordinary wheel keeps native page scrolling.
       if (!event.ctrlKey || event.deltaY === 0) return;
@@ -115,25 +112,12 @@ export function PdfPreview({ file }: { file: FileInfo }) {
         setNotice("입력한 내용을 적용하거나 취소한 뒤 확대·축소할 수 있습니다.");
         return;
       }
-      delta += event.deltaY;
-      clearTimeout(timer);
-      timer = setTimeout(() => {
-        const levels = [50, 75, 100, 125, 150, 200];
-        setZoom(
-          (current) =>
-            levels[
-              Math.max(
-                0,
-                Math.min(levels.length - 1, levels.indexOf(current) + (delta < 0 ? 1 : -1)),
-              )
-            ],
-        );
-        delta = 0;
-      }, 100);
+      // Apply every wheel event immediately. Only the expensive PDF render is
+      // debounced below, so a fast burst never collapses into a single step.
+      setZoom((current) => Math.max(25, Math.min(400, current + (event.deltaY < 0 ? 15 : -15))));
     };
     area.addEventListener("wheel", wheel, { passive: false });
     return () => {
-      clearTimeout(timer);
       area.removeEventListener("wheel", wheel);
     };
   }, [busy, loading, unsavedDraft, page]);
@@ -177,7 +161,8 @@ export function PdfPreview({ file }: { file: FileInfo }) {
     }
     const timer = setTimeout(
       () => {
-        void renderPage(file.id, pageIndex, (800 * zoom) / 100)
+        // Display zoom is independent of the bounded native bitmap size.
+        void renderPage(file.id, pageIndex, Math.max(300, Math.min(1600, (800 * zoom) / 100)))
           .then(async (result) => {
             // Decode before replacing the animated old bitmap to avoid a blank frame.
             if (typeof Image.prototype.decode === "function") {
@@ -613,6 +598,27 @@ export function PdfPreview({ file }: { file: FileInfo }) {
     await clear();
   }
 
+  async function openOtherFile() {
+    if (working.current) return;
+    working.current = true;
+    setBusy(true);
+    try {
+      const path = await open({
+        multiple: false,
+        directory: false,
+        filters: [{ name: "PDF", extensions: ["pdf"] }],
+      });
+      if (!path || typeof path !== "string") return;
+      if (closeState.current.dirty && !(await confirmDiscard())) return;
+      await useAppStore.getState().replaceFile([path]);
+    } catch (cause) {
+      setEditError(errorMessage(cause));
+    } finally {
+      working.current = false;
+      setBusy(false);
+    }
+  }
+
   useEffect(() => {
     if (!isTauri()) return;
     let disposed = false;
@@ -695,7 +701,7 @@ export function PdfPreview({ file }: { file: FileInfo }) {
   );
 
   const pageWarning =
-    editingEnabled && page
+    editingEnabled && page && selectionMode !== "graphic"
       ? (page.text.warning ??
         (page.text.objects.length === 0
           ? "선택 가능한 텍스트 객체가 없습니다. 이미지나 윤곽선으로 저장된 글자일 수 있습니다."
@@ -711,7 +717,7 @@ export function PdfPreview({ file }: { file: FileInfo }) {
     pageWarning;
 
   return (
-    <main className="flex h-screen select-none overflow-hidden">
+    <main className="flex h-full select-none overflow-hidden">
       {discardDialog}
       {pageCount !== null && (
         <PageSidebar
@@ -745,7 +751,6 @@ export function PdfPreview({ file }: { file: FileInfo }) {
               {editState.dirty ? "저장하지 않은 변경 있음" : "원본 보호 · 새 파일로 저장"}
             </p>
           </div>
-          <VersionDialog />
           <div className="flex items-center gap-3">
             <select
               aria-label="확대 비율"
@@ -754,7 +759,7 @@ export function PdfPreview({ file }: { file: FileInfo }) {
               onChange={(event) => setZoom(Number(event.target.value))}
               className="rounded-lg border border-stone-200 bg-white px-3 py-2 text-sm"
             >
-              {[50, 75, 100, 125, 150, 200].map((value) => (
+              {Array.from({ length: 26 }, (_, i) => 25 + i * 15).map((value) => (
                 <option key={value} value={value}>
                   {value}%
                 </option>
@@ -769,10 +774,14 @@ export function PdfPreview({ file }: { file: FileInfo }) {
           />
         </header>
         {!editingEnabled && (
-          <div className="flex items-center gap-5 border-b border-amber-200 bg-amber-50 px-6 py-3 text-sm text-amber-950">
-            <p className="flex-1">
-              원본 파일 보호를 위해 읽기 전용으로 열었습니다. 내용을 수정하려면 ‘편집 사용’을
-              눌러주세요.
+          <div
+            role="note"
+            className="flex shrink-0 items-center gap-3 border-b border-amber-200 bg-amber-50/90 px-4 py-2 text-xs text-stone-700"
+          >
+            <Info size={19} className="shrink-0 text-sky-700" aria-hidden="true" />
+            <p className="min-w-0 flex-1 leading-5">
+              <strong className="mr-2 font-semibold text-stone-800">읽기 전용</strong>
+              원본을 보호하고 있습니다. 수정하려면 ‘편집 사용’을 눌러주세요.
             </p>
             <button
               type="button"
@@ -780,7 +789,7 @@ export function PdfPreview({ file }: { file: FileInfo }) {
                 setEditingEnabled(true);
               }}
               disabled={loading || busy}
-              className="shrink-0 rounded-lg border border-amber-300 bg-white px-4 py-2 font-medium transition-colors hover:bg-amber-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-700 disabled:opacity-40"
+              className="shrink-0 rounded-md border border-amber-300 bg-white px-3 py-1.5 font-medium text-stone-800 shadow-sm transition-colors hover:bg-amber-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-700 disabled:opacity-40"
             >
               편집 사용
             </button>
@@ -795,7 +804,7 @@ export function PdfPreview({ file }: { file: FileInfo }) {
               <button
                 type="button"
                 disabled={busy || clearing}
-                onClick={() => void closeDocument()}
+                onClick={() => void openOtherFile()}
                 className="ribbon-command"
               >
                 <FolderOpen size={23} aria-hidden="true" />
@@ -835,6 +844,7 @@ export function PdfPreview({ file }: { file: FileInfo }) {
                   <option value="paragraph">블록 선택</option>
                   <option value="sentence">문장 선택</option>
                   <option value="object">객체 선택</option>
+                  <option value="graphic">이미지·도형 선택</option>
                 </select>
               </label>
               <span className="ribbon-caption">선택 단위</span>
@@ -1141,6 +1151,7 @@ export function PdfPreview({ file }: { file: FileInfo }) {
                   disabled={busy || loading || error !== null}
                   editingEnabled={editingEnabled}
                   mode={selectionMode}
+                  onGraphicEdit={async (action) => !!(await run(action))}
                   blockSize={blockSize}
                   onResize={setBlockSize}
                   inlineEditing={inlineEditing}

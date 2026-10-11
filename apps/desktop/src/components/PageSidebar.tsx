@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { renderPage } from "../lib/preview";
-import { RotateCcw, PanelsTopLeft } from "lucide-react";
+import { RotateCcw } from "lucide-react";
+import appIcon from "../../app-icon.svg";
 import { IconButton } from "./ui/icon-button";
 
 const ROW_HEIGHT = 196;
@@ -116,7 +117,7 @@ export function PageSidebar({
       className={`sidebar-shell flex min-h-0 w-44 shrink-0 flex-col overflow-hidden border-r border-stone-200 bg-stone-100 transition-[margin-left] duration-250 ease-out sm:w-52 ${open ? "ml-0" : "-ml-44 sm:-ml-52"}`}
     >
       <div className="flex h-[73px] shrink-0 items-center gap-2 whitespace-nowrap border-b border-stone-200 px-4 text-sm font-semibold text-emerald-900">
-        <PanelsTopLeft size={19} aria-hidden="true" />
+        <img src={appIcon} alt="" className="size-6" />
         Paperkit
       </div>
       <p className="border-b border-stone-200 px-4 py-3 text-xs font-semibold text-stone-500">

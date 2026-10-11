@@ -30,6 +30,268 @@ fn pdf(stream: &str, rotation: i32) -> Vec<u8> {
 
 #[test]
 #[ignore = "requires bundled Windows PDFium"]
+fn edits_scaled_text_and_roundtrips_without_rejecting_float_roundoff() {
+    let resources =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/resources");
+    let engine = PreviewEngine::start(resources.join("pdfium/pdfium.dll")).unwrap();
+    let path =
+        std::env::temp_dir().join(format!("paperkit-scaled-edit-{}.pdf", std::process::id()));
+    let original=pdf("q .75 0 0 .75 0 0 cm BT /F1 12 Tf 1 0 0 1 40 700 Tm (Original text) Tj ET Q\nBT /F1 12 Tf 40 300 Td (KEEP) Tj ET\n",0);
+    fs::write(&path, &original).unwrap();
+    let before = engine
+        .render("scaled".into(), path.clone(), 0, 800)
+        .unwrap();
+    let group = before
+        .text
+        .groups
+        .iter()
+        .find(|g| g.can_flow && g.text.contains("Original"))
+        .unwrap();
+    engine
+        .edit(
+            "scaled".into(),
+            0,
+            EditAction::FlowBlock {
+                page: 0,
+                group: group.id,
+                text: "Changed text 1".into(),
+                width: None,
+                height: None,
+            },
+        )
+        .unwrap();
+    let after = engine
+        .render("scaled".into(), path.clone(), 0, 800)
+        .unwrap();
+    assert!(after
+        .text
+        .objects
+        .iter()
+        .any(|o| o.text.contains("Changed text 1")));
+    let saved = path.with_extension("saved.pdf");
+    engine
+        .edit(
+            "scaled".into(),
+            1,
+            EditAction::Save {
+                path: saved.clone(),
+            },
+        )
+        .unwrap();
+    engine.edit("scaled".into(), 1, EditAction::Undo).unwrap();
+    assert_eq!(
+        engine
+            .render("scaled".into(), path.clone(), 0, 800)
+            .unwrap()
+            .png,
+        before.png
+    );
+    assert_eq!(
+        engine
+            .render("saved".into(), saved.clone(), 0, 800)
+            .unwrap()
+            .png,
+        after.png
+    );
+    assert_eq!(fs::read(&path).unwrap(), original);
+    fs::remove_file(path).unwrap();
+    fs::remove_file(saved).unwrap();
+}
+
+#[test]
+#[ignore = "requires bundled Windows PDFium"]
+fn recognizes_graphics_without_turning_them_into_text() {
+    let resources =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/resources");
+    let engine = PreviewEngine::start(resources.join("pdfium/pdfium.dll")).unwrap();
+    let path = std::env::temp_dir().join(format!("paperkit-graphics-{}.pdf", std::process::id()));
+    let base = pdf("q 1 0 0 rg 40 500 120 80 re f Q\nq 100 0 0 50 200 400 cm /Im1 Do Q\nBT /F1 12 Tf 40 700 Td (Text stays text) Tj ET\n", 0);
+    let mut doc = lopdf::Document::load_mem(&base).unwrap();
+    let mut dict = lopdf::Dictionary::new();
+    dict.set("Type", "XObject");
+    dict.set("Subtype", "Image");
+    dict.set("Width", 1);
+    dict.set("Height", 1);
+    dict.set("ColorSpace", "DeviceRGB");
+    dict.set("BitsPerComponent", 8);
+    let image_id = doc.add_object(lopdf::Stream::new(dict, vec![255, 0, 0]));
+    let mut images = lopdf::Dictionary::new();
+    images.set("Im1", image_id);
+    doc.get_object_mut((3, 0))
+        .unwrap()
+        .as_dict_mut()
+        .unwrap()
+        .get_mut(b"Resources")
+        .unwrap()
+        .as_dict_mut()
+        .unwrap()
+        .set("XObject", images);
+    let mut original = Vec::new();
+    doc.save_to(&mut original).unwrap();
+    fs::write(&path, &original).unwrap();
+    let page = engine
+        .render("graphics".into(), path.clone(), 0, 600)
+        .unwrap();
+    assert_eq!(page.text.graphics.len(), 2);
+    assert!(page.text.graphics.iter().any(|o| o.kind == "image"));
+    let shape = page
+        .text
+        .graphics
+        .iter()
+        .find(|o| o.kind == "path")
+        .unwrap();
+    assert!(shape.bounds.iter().all(|p| p[0] >= 39.9 && p[0] <= 160.1));
+    assert!(shape
+        .screen_bounds
+        .iter()
+        .all(|p| p[1] >= 219 && p[1] <= 301));
+    assert_eq!(page.text.objects.len(), 1);
+    let zoomed = engine
+        .render("graphics".into(), path.clone(), 0, 1200)
+        .unwrap();
+    assert_eq!(zoomed.text.graphics[0].id, page.text.graphics[0].id);
+    assert_eq!(zoomed.text.graphics[0].bounds, page.text.graphics[0].bounds);
+    let foreground = engine
+        .layer("graphics".into(), 0, 0, 600, vec![shape.id], true)
+        .unwrap();
+    assert!(!foreground.is_empty());
+    let image = page
+        .text
+        .graphics
+        .iter()
+        .find(|o| o.kind == "image")
+        .unwrap();
+    engine
+        .edit(
+            "graphics".into(),
+            0,
+            EditAction::TransformGraphic {
+                page: 0,
+                object: image.id,
+                matrix: [1., 0., 0., 1., 20., 10.],
+            },
+        )
+        .unwrap();
+    let moved = engine
+        .render("graphics".into(), path.clone(), 0, 600)
+        .unwrap();
+    let moved_image = moved
+        .text
+        .graphics
+        .iter()
+        .find(|o| o.kind == "image")
+        .unwrap();
+    assert!((moved_image.bounds[0][0] - image.bounds[0][0] - 20.).abs() < 0.1);
+    assert_eq!(moved.text.objects[0].text, page.text.objects[0].text);
+    engine
+        .edit(
+            "graphics".into(),
+            1,
+            EditAction::TransformGraphic {
+                page: 0,
+                object: image.id,
+                matrix: [1.5, 0., 0., 1.5, 0., 0.],
+            },
+        )
+        .unwrap();
+    let resized = engine
+        .render("graphics".into(), path.clone(), 0, 600)
+        .unwrap();
+    assert_ne!(resized.png, moved.png);
+    let saved = path.with_extension("saved.pdf");
+    engine
+        .edit(
+            "graphics".into(),
+            2,
+            EditAction::Save {
+                path: saved.clone(),
+            },
+        )
+        .unwrap();
+    engine
+        .edit(
+            "graphics".into(),
+            2,
+            EditAction::DeleteGraphic {
+                page: 0,
+                object: image.id,
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        engine
+            .render("graphics".into(), path.clone(), 0, 600)
+            .unwrap()
+            .text
+            .graphics
+            .len(),
+        1
+    );
+    engine.edit("graphics".into(), 3, EditAction::Undo).unwrap();
+    assert_eq!(
+        engine
+            .render("graphics".into(), path.clone(), 0, 600)
+            .unwrap()
+            .png,
+        resized.png
+    );
+    engine.edit("graphics".into(), 4, EditAction::Redo).unwrap();
+    engine
+        .edit(
+            "graphics".into(),
+            5,
+            EditAction::TransformGraphic {
+                page: 0,
+                object: shape.id,
+                matrix: [1.2, 0., 0., 1.2, 5., -20.],
+            },
+        )
+        .unwrap();
+    let shape_changed = engine
+        .render("graphics".into(), path.clone(), 0, 600)
+        .unwrap();
+    assert!((shape_changed.text.graphics[0].bounds[0][0] - 53.).abs() < 0.1);
+    engine
+        .edit(
+            "graphics".into(),
+            6,
+            EditAction::DeleteGraphic {
+                page: 0,
+                object: shape.id,
+            },
+        )
+        .unwrap();
+    assert!(engine
+        .render("graphics".into(), path.clone(), 0, 600)
+        .unwrap()
+        .text
+        .graphics
+        .is_empty());
+    engine.edit("graphics".into(), 7, EditAction::Undo).unwrap();
+    assert_eq!(
+        engine
+            .render("graphics".into(), path.clone(), 0, 600)
+            .unwrap()
+            .text
+            .graphics
+            .len(),
+        1
+    );
+    assert_eq!(
+        engine
+            .render("reopened".into(), saved.clone(), 0, 600)
+            .unwrap()
+            .png,
+        resized.png
+    );
+    fs::remove_file(saved).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), original);
+    engine.release("graphics".into()).unwrap();
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+#[ignore = "requires bundled Windows PDFium"]
 fn alignment_preserves_center_and_applies_right_then_roundtrips() {
     use pdf_core::alignment::Alignment;
     let resources =

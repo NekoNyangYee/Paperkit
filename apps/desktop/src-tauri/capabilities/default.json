@@ -9,9 +9,13 @@
     "dialog:allow-save",
     "dialog:allow-confirm",
     "core:window:allow-destroy",
+    "core:window:allow-close",
+    "core:window:allow-minimize",
+    "core:window:allow-toggle-maximize",
+    "core:window:allow-start-dragging",
     {
       "identifier": "opener:allow-open-url",
-      "allow": [{ "url": "https://github.com/NekoNyangYee/pdf-editor/releases/download/*" }]
+      "allow": [{ "url": "https://*" }, { "url": "http://*" }]
     }
   ]
 }

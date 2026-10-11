@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, CircleAlert, Info, Trash2, Undo2 } from "lucide-react";
+import { CircleAlert, Info } from "lucide-react";
 import {
   AlertDialog,
   AlertDialogContent,
@@ -58,7 +58,7 @@ export function MessageDialog({
               onClick={onRetry}
               className="dialog-button"
             >
-              <Undo2 size={18} aria-hidden="true" />
+              다시 시도
             </AlertDialogAction>
           )}
           <AlertDialogCancel
@@ -66,7 +66,7 @@ export function MessageDialog({
             title="확인"
             className="dialog-button bg-emerald-900 text-white"
           >
-            <Check size={18} aria-hidden="true" />
+            확인
           </AlertDialogCancel>
         </div>
       </AlertDialogContent>
@@ -128,7 +128,7 @@ export function useDiscardDialog() {
             className="dialog-button"
             onClick={() => finish(false)}
           >
-            <Undo2 size={18} aria-hidden="true" />
+            돌아가기
           </AlertDialogCancel>
           <AlertDialogAction
             aria-label="변경 버리기"
@@ -136,7 +136,7 @@ export function useDiscardDialog() {
             className="dialog-button bg-red-700 text-white"
             onClick={() => finish(true)}
           >
-            <Trash2 size={18} aria-hidden="true" />
+            변경 버리기
           </AlertDialogAction>
         </div>
       </AlertDialogContent>

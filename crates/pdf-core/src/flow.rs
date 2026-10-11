@@ -532,7 +532,10 @@ fn verify(
                             && o.font == style.font
                             && o.color == style.color
                             && (o.font_size - style.font_size).abs() < 0.01
-                            && o.matrix[..4] == style.matrix[..4]
+                            && o.matrix[..4]
+                                .iter()
+                                .zip(&style.matrix[..4])
+                                .all(|(a, b)| (*a - *b).abs() < 0.00001)
                             && (o.matrix[4] - x).abs() < 0.01
                             && (o.matrix[5] - y).abs() < 0.01
                     })
@@ -562,11 +565,10 @@ fn verify(
                 .collect::<Vec<_>>()
         };
         let empty = BTreeSet::new();
-        if ta.warning != tb.warning
-            || normalize(ta.objects, if i == index { ids } else { &empty })
-                != normalize(tb.objects, &changed)
-        {
-            return Err(PreviewError::VerificationFailed);
+        let left = normalize(ta.objects, if i == index { ids } else { &empty });
+        let right = normalize(tb.objects, &changed);
+        if ta.warning != tb.warning || left != right {
+            return Err(PreviewError::UnchangedTextModified);
         }
         let a = a
             .render_with_config(config)

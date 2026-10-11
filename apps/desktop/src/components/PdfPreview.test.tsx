@@ -157,21 +157,74 @@ it("zooms with Ctrl wheel but leaves ordinary wheel for scrolling", async () => 
   fireEvent.wheel(area, { deltaY: -120, ctrlKey: true });
   await waitFor(() =>
     expect((screen.getByRole("combobox", { name: "확대 비율" }) as HTMLSelectElement).value).toBe(
-      "125",
+      "115",
     ),
   );
   await screen.findByRole("img", { name: "example.pdf · 1페이지" });
   fireEvent.wheel(area, { deltaY: 120 });
   expect((screen.getByRole("combobox", { name: "확대 비율" }) as HTMLSelectElement).value).toBe(
-    "125",
+    "115",
   );
+});
+
+it("accumulates rapid wheel input immediately and renders only the final zoom", async () => {
+  render(<PdfPreview file={file} />);
+  await screen.findByRole("img", { name: "example.pdf · 1페이지" });
+  const area = screen.getByRole("region", { name: "PDF 페이지" });
+  const select = screen.getByRole("combobox", { name: "확대 비율" }) as HTMLSelectElement;
+  mocks.invoke.mockClear();
+  for (let i = 0; i < 5; i++) fireEvent.wheel(area, { deltaY: -120, ctrlKey: true });
+  expect(select.value).toBe("175");
+  for (let i = 0; i < 2; i++) fireEvent.wheel(area, { deltaY: 120, ctrlKey: true });
+  expect(select.value).toBe("145");
+  await waitFor(() =>
+    expect(mocks.invoke).toHaveBeenCalledWith("render_selected_page", {
+      fileId: file.id,
+      pageIndex: 0,
+      width: 1160,
+    }),
+  );
+  const pageRenders = mocks.invoke.mock.calls.filter(
+    ([command, args]) => command === "render_selected_page" && args.width !== 300,
+  );
+  expect(pageRenders).toHaveLength(1);
+});
+
+it.each([
+  { zoom: 25, width: 300, delta: 120 },
+  { zoom: 400, width: 1600, delta: -120 },
+])("supports expanded zoom with bounded rendering: %j", async ({ zoom, width, delta }) => {
+  mocks.invoke.mockImplementation(async (command, args) => {
+    if (command === "render_selected_page")
+      return { ...page(args.pageIndex, args.width), height: Math.min(2200, args.width * 1.5) };
+  });
+  render(<PdfPreview file={file} />);
+  const select = screen.getByRole("combobox", { name: "확대 비율" }) as HTMLSelectElement;
+  await waitFor(() => expect(select.disabled).toBe(false));
+  fireEvent.change(select, { target: { value: String(zoom) } });
+  await waitFor(() =>
+    expect(mocks.invoke).toHaveBeenCalledWith("render_selected_page", {
+      fileId: file.id,
+      pageIndex: 0,
+      width,
+    }),
+  );
+  await waitFor(() => expect(select.disabled).toBe(false));
+  fireEvent.wheel(screen.getByRole("region", { name: "PDF 페이지" }), {
+    ctrlKey: true,
+    deltaY: delta,
+  });
+  await act(async () => {
+    await new Promise((resolve) => setTimeout(resolve, 150));
+  });
+  expect(select.value).toBe(String(zoom));
 });
 
 it("keeps the old page visible during zoom and replaces it after rendering", async () => {
   let finish: (value: ReturnType<typeof page>) => void = () => {};
   mocks.invoke.mockImplementation(async (command, args) => {
     if (command === "render_selected_page") {
-      if (args.width === 1000)
+      if (args.width === 920)
         return new Promise((resolve) => {
           finish = resolve;
         });
@@ -187,19 +240,19 @@ it("keeps the old page visible during zoom and replaces it after rendering", asy
   await waitFor(() =>
     expect(mocks.invoke).toHaveBeenCalledWith(
       "render_selected_page",
-      expect.objectContaining({ width: 1000 }),
+      expect.objectContaining({ width: 920 }),
     ),
   );
   expect(screen.getByRole("img", { name: "example.pdf · 1페이지" })).toBe(original);
   await waitFor(() =>
     expect(original.closest("[data-pdf-zoom-surface]")?.getAttribute("style")).toContain(
-      "scale(1.25)",
+      "scale(1.15)",
     ),
   );
-  await act(async () => finish(page(0, 1000)));
+  await act(async () => finish(page(0, 920)));
   await waitFor(() =>
     expect(screen.getByRole("img", { name: "example.pdf · 1페이지" }).getAttribute("width")).toBe(
-      "1000",
+      "920",
     ),
   );
 });
@@ -784,6 +837,30 @@ it("marks uncertain groups read-only while retaining explicit object selection",
   expect((screen.getByRole("button", { name: "적용" }) as HTMLButtonElement).disabled).toBe(true);
 });
 
+it("switches from text selection to recognized graphics without a text hit layer", async () => {
+  mocks.invoke.mockImplementation(async (command, args) => {
+    if (command === "render_selected_page")
+      return {
+        ...groupedPage(args.pageIndex, args.width),
+        text: {
+          ...groupedPage(args.pageIndex, args.width).text,
+          graphics: [
+            { id: 9, kind: "image", bounds: object.bounds, screenBounds: object.screenBounds },
+          ],
+        },
+      };
+  });
+  render(<PdfPreview file={file} />);
+  await enableEditing("graphic");
+  const image = await screen.findByRole("button", { name: "이미지 10 선택" });
+  expect(screen.queryByLabelText("텍스트 객체 선택")).toBeNull();
+  fireEvent.click(image);
+  expect(image.getAttribute("aria-pressed")).toBe("true");
+  expect(mocks.invoke.mock.calls.filter(([command]) => command === "edit_document")).toHaveLength(
+    0,
+  );
+});
+
 async function enableEditing(mode = "sentence") {
   await waitFor(() =>
     expect((screen.getByRole("button", { name: "편집 사용" }) as HTMLButtonElement).disabled).toBe(
@@ -796,6 +873,44 @@ async function enableEditing(mode = "sentence") {
   });
 }
 
+it.each([
+  { dirty: true, pick: null, discard: false, replaced: false, confirms: 0 },
+  { dirty: true, pick: "C:\\next.pdf", discard: false, replaced: false, confirms: 1 },
+  { dirty: true, pick: "C:\\next.pdf", discard: true, replaced: true, confirms: 1 },
+  { dirty: false, pick: "C:\\next.pdf", discard: false, replaced: true, confirms: 0 },
+])("opens a replacement in place: %j", async ({ dirty, pick, discard, replaced, confirms }) => {
+  const next = { ...file, id: "next-file", path: "C:\\next.pdf", name: "next.pdf" };
+  useAppStore.setState({ openedFileId: file.id });
+  mocks.open.mockResolvedValue(pick);
+  mocks.confirm.mockResolvedValue(discard);
+  mocks.invoke.mockImplementation(async (command, args) => {
+    if (command === "render_selected_page")
+      return {
+        ...page(args.pageIndex, args.width),
+        state: { revision: 0, dirty, canUndo: dirty, canRedo: false },
+      };
+    if (command === "receive_file_input")
+      return { revision: args.revision, file: next, error: null };
+  });
+  render(<PdfPreview file={file} />);
+  await enableEditing();
+  const snapshots: (string | null)[] = [];
+  const unsubscribe = useAppStore.subscribe((state) => snapshots.push(state.openedFileId));
+  fireEvent.click(screen.getByRole("button", { name: "다른 파일 열기" }));
+  await waitFor(() => expect(mocks.open).toHaveBeenCalledTimes(1));
+  await waitFor(() =>
+    expect(
+      (screen.getByRole("button", { name: "다른 파일 열기" }) as HTMLButtonElement).disabled,
+    ).toBe(false),
+  );
+  expect(mocks.confirm).toHaveBeenCalledTimes(confirms);
+  expect(useAppStore.getState().file?.id).toBe(replaced ? next.id : file.id);
+  expect(useAppStore.getState().openedFileId).toBe(replaced ? next.id : file.id);
+  expect(snapshots).not.toContain(null);
+  expect(mocks.invoke.mock.calls.some(([cmd]) => cmd === "clear_selection")).toBe(false);
+  unsubscribe();
+});
+
 it("opens read-only, blocks editing shortcuts, and enables an input at the text position", async () => {
   mocks.invoke.mockImplementation(async (command, args) =>
     command === "render_selected_page"
@@ -804,7 +919,7 @@ it("opens read-only, blocks editing shortcuts, and enables an input at the text 
   );
   render(<PdfPreview file={file} />);
   await screen.findByRole("img", { name: "example.pdf · 1페이지" });
-  expect(screen.getByText(/원본 파일 보호를 위해 읽기 전용/)).toBeTruthy();
+  expect(screen.getByRole("note").textContent).toContain("원본을 보호하고 있습니다.");
   expect(screen.queryByRole("button", { name: "텍스트 선택: Hello World" })).toBeNull();
   fireEvent.keyDown(window, { key: "z", ctrlKey: true });
   fireEvent.keyDown(window, { key: "s", ctrlKey: true });
@@ -1269,17 +1384,17 @@ it("renders the selected file, navigates and rerenders at a new zoom", async () 
   fireEvent.click(screen.getByRole("button", { name: "다음 페이지" }));
   await screen.findByRole("img", { name: "example.pdf · 2페이지" });
   fireEvent.change(screen.getByRole("combobox", { name: "확대 비율" }), {
-    target: { value: "150" },
+    target: { value: "145" },
   });
   await waitFor(() =>
     expect(screen.getByRole("img", { name: "example.pdf · 2페이지" }).getAttribute("width")).toBe(
-      "1200",
+      "1160",
     ),
   );
   expect(mocks.invoke).toHaveBeenCalledWith("render_selected_page", {
     fileId: file.id,
     pageIndex: 1,
-    width: 1200,
+    width: 1160,
   });
 });
 

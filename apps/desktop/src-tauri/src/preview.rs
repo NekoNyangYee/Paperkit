@@ -58,6 +58,9 @@ fn message(error: PreviewError) -> String {
         PreviewError::VerificationFailed => {
             "변경 결과를 검증하지 못했습니다. 작업을 반영하지 않았습니다."
         }
+        PreviewError::UnchangedTextModified => {
+            "이 PDF를 다시 구성하는 과정에서 수정하지 않은 다른 글자의 보존에 실패했습니다. 원본과 입력 내용은 유지했습니다. 이 문서 구조는 현재 편집 엔진에서 지원을 보완해야 합니다."
+        }
         PreviewError::NoHistory => "되돌릴 작업이 없습니다.",
         PreviewError::SaveFailed => {
             "파일을 저장하지 못했습니다. 로컬 폴더와 새 PDF 파일명을 선택해 주세요."
