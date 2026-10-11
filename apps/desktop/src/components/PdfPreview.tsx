@@ -25,6 +25,7 @@ import {
   FileText,
 } from "lucide-react";
 import { IconButton } from "./ui/icon-button";
+import { registerExitGuard } from "../lib/app-exit";
 import { MessageDialog, useDiscardDialog } from "./MessageDialog";
 import type { FileInfo } from "../lib/desktop";
 import { errorMessage } from "../lib/desktop";
@@ -649,6 +650,16 @@ export function PdfPreview({ file }: { file: FileInfo }) {
       unlisten?.();
     };
   }, []);
+
+  useEffect(
+    () =>
+      registerExitGuard(async () => {
+        if (working.current) throw new Error("문서 작업이 끝난 뒤 업데이트해 주세요.");
+        if (closeState.current.dirty && !(await confirmDiscard())) return false;
+        return !working.current;
+      }),
+    [],
+  );
 
   useEffect(() => {
     const handler = (event: BeforeUnloadEvent) => {

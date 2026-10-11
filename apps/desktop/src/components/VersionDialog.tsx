@@ -9,6 +9,8 @@ import { IconButton } from "./ui/icon-button";
 import { compareVersions, latestRelease } from "../lib/releases";
 import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
+import { downloadUpdate, installUpdate } from "../lib/updater";
+import { approveAppExit } from "../lib/app-exit";
 
 export function VersionDialog() {
   const [open, setOpen] = useState(false);
@@ -16,8 +18,13 @@ export function VersionDialog() {
   const [release, setRelease] = useState<Awaited<ReturnType<typeof latestRelease>> | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(false);
-  const [opening, setOpening] = useState(false);
-  const [downloadStarted, setDownloadStarted] = useState(false);
+  const [updatePhase, setUpdatePhase] = useState<"idle" | "downloading" | "ready" | "installing">(
+    "idle",
+  );
+  const [percent, setPercent] = useState<number | null>(null);
+  const [readyTag, setReadyTag] = useState<string | null>(null);
+  const updating = useRef(false);
+  const skipNextCheck = useRef(false);
   const pending = useRef<AbortController | null>(null);
   function changeOpen(value: boolean) {
     setOpen(value);
@@ -35,7 +42,6 @@ export function VersionDialog() {
     setLoading(true);
     setError(null);
     setRelease(null);
-    setDownloadStarted(false);
     try {
       if (isTauri()) setVersion(await getVersion());
       if (controller.signal.aborted) return;
@@ -57,7 +63,10 @@ export function VersionDialog() {
     }
   }, []);
   useEffect(() => {
-    if (open) void check();
+    if (open) {
+      if (skipNextCheck.current) skipNextCheck.current = false;
+      else void check();
+    }
     return () => {
       pending.current?.abort();
       pending.current = null;
@@ -112,7 +121,7 @@ export function VersionDialog() {
 
             <button
               onClick={() => void check()}
-              disabled={loading}
+              disabled={loading || updatePhase === "downloading" || updatePhase === "installing"}
               className="flex shrink-0 items-center gap-2 rounded-lg bg-emerald-800 px-4 py-2 text-sm text-white"
             >
               <RefreshCw size={16} className={loading ? "animate-spin" : ""} />
@@ -124,28 +133,65 @@ export function VersionDialog() {
             <div className="mt-4 flex flex-col items-end">
               <button
                 className="flex cursor-pointer items-center gap-2 rounded-lg bg-emerald-800 px-4 py-2 text-sm text-white disabled:cursor-not-allowed disabled:opacity-50"
-                disabled={!release.downloadUrl || opening}
+                disabled={
+                  !release.downloadUrl ||
+                  updatePhase === "downloading" ||
+                  updatePhase === "installing"
+                }
                 onClick={async () => {
-                  if (!release.downloadUrl) return;
-                  setOpening(true);
+                  if (!release.downloadUrl || updating.current) return;
+                  updating.current = true;
+                  setError(null);
                   try {
-                    await openUrl(release.downloadUrl);
-                    setDownloadStarted(true);
-                  } catch {
-                    setError("설치 파일 다운로드를 열지 못했습니다. 다시 시도해 주세요.");
+                    if (readyTag === release.tag) {
+                      skipNextCheck.current = true;
+                      changeOpen(false);
+                      if (!(await approveAppExit())) {
+                        setOpen(true);
+                        return;
+                      }
+                      setOpen(true);
+                      setUpdatePhase("installing");
+                      await installUpdate();
+                    } else {
+                      setReadyTag(null);
+                      setUpdatePhase("downloading");
+                      setPercent(null);
+                      await downloadUpdate(release.tag, ({ downloaded, total }) => {
+                        setPercent(
+                          total ? Math.min(100, Math.floor((downloaded / total) * 100)) : null,
+                        );
+                      });
+                      setReadyTag(release.tag);
+                      setUpdatePhase("ready");
+                    }
+                  } catch (cause) {
+                    setOpen(true);
+                    setReadyTag(null);
+                    setUpdatePhase("idle");
+                    setError(cause instanceof Error ? cause.message : String(cause));
                   } finally {
-                    setOpening(false);
+                    updating.current = false;
                   }
                 }}
               >
-                <Download size={16} /> {opening ? "다운로드 여는 중…" : "업데이트"}
+                <Download size={16} />{" "}
+                {updatePhase === "downloading"
+                  ? `다운로드 중${percent === null ? "…" : ` ${percent}%`}`
+                  : updatePhase === "installing"
+                    ? "업데이트 적용 중…"
+                    : readyTag === release.tag
+                      ? "재시작하여 업데이트"
+                      : "업데이트"}
               </button>
               <p className="mt-2 text-xs text-stone-500">
                 {!release.downloadUrl
                   ? "업데이트 설치 파일이 아직 준비되지 않았습니다."
-                  : downloadStarted
-                    ? "브라우저에서 다운로드한 설치 파일을 실행해 주세요. 설치 전 작업을 저장해 주세요."
-                    : "새 버전 설치 파일을 다운로드합니다."}
+                  : updatePhase === "downloading"
+                    ? "앱에서 업데이트를 내려받고 검증하고 있습니다."
+                    : readyTag === release.tag
+                      ? "다운로드가 완료되었습니다. 재시작하면 새 버전을 설치하고 앱을 다시 엽니다."
+                      : "앱에서 다운로드합니다. 완료 후 재시작할 시점을 선택할 수 있습니다."}
               </p>
             </div>
           )}

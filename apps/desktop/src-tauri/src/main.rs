@@ -2,6 +2,7 @@
 
 mod commands;
 mod preview;
+mod updater;
 use tauri::Manager;
 
 fn main() {
@@ -9,6 +10,7 @@ fn main() {
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
         .manage(commands::AppState::default())
+        .manage(updater::UpdateState::default())
         .setup(|app| {
             #[cfg(debug_assertions)]
             let library = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -30,6 +32,8 @@ fn main() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            updater::download_update,
+            updater::install_update,
             commands::receive_file_input,
             commands::synchronize_selection,
             commands::clear_selection,
