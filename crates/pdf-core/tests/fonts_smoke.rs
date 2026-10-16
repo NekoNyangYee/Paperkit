@@ -150,6 +150,7 @@ fn flexible_edit_changes_only_requested_font_runs_and_roundtrips() {
         .iter()
         .find(|o| o.text.contains("Edited"))
         .unwrap();
+    assert_eq!(edited_object.font_weight, Some(700));
     assert!(engine
         .font_for_text(
             "flexible".into(),

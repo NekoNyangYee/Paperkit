@@ -14,6 +14,68 @@ fn resolved<'a>(doc: &'a Document, object: &'a Object) -> Option<&'a Object> {
     doc.dereference(object).ok().map(|(_, value)| value)
 }
 
+// Only remove the PDF subset prefix. Keep face/weight/style spelling intact.
+fn face_name(name: &str) -> &str {
+    let bytes = name.as_bytes();
+    if bytes.len() > 7 && bytes[6] == b'+' && bytes[..6].iter().all(u8::is_ascii_uppercase) {
+        &name[7..]
+    } else {
+        name
+    }
+}
+
+pub(crate) fn matching_embedded(pdf: &[u8], name: &str, text: &str) -> Option<Vec<u8>> {
+    let doc = Document::load_mem(pdf).ok()?;
+    let mut seen = std::collections::BTreeSet::new();
+    let mut inspected = 0;
+    for object in doc.objects.values() {
+        let Ok(descriptor) = object.as_dict() else {
+            continue;
+        };
+        if descriptor.get(b"Type").ok().and_then(|o| o.as_name().ok()) != Some(b"FontDescriptor") {
+            continue;
+        }
+        let Some(candidate_name) = descriptor
+            .get(b"FontName")
+            .ok()
+            .and_then(|o| o.as_name().ok())
+            .and_then(|n| std::str::from_utf8(n).ok())
+        else {
+            continue;
+        };
+        if face_name(candidate_name) != face_name(name) {
+            continue;
+        }
+        let Some(stream) = descriptor
+            .get(b"FontFile2")
+            .ok()
+            .and_then(|o| resolved(&doc, o))
+            .and_then(|o| o.as_stream().ok())
+        else {
+            continue;
+        };
+        inspected += 1;
+        if inspected > 256 {
+            break;
+        }
+        let Ok(bytes) = stream.get_plain_content_with_limit(32 * 1024 * 1024) else {
+            continue;
+        };
+        if !seen.insert(Sha256::digest(&bytes).to_vec()) {
+            continue;
+        }
+        if crate::fonts::validate_original(&bytes, text).is_ok() {
+            return Some(bytes);
+        }
+        if let Some(repaired) = recover(pdf, &bytes) {
+            if crate::fonts::validate_original(&repaired, text).is_ok() {
+                return Some(repaired);
+            }
+        }
+    }
+    None
+}
+
 pub(crate) fn recover(pdf: &[u8], original: &[u8]) -> Option<Vec<u8>> {
     let mut hash = Sha256::new();
     hash.update((pdf.len() as u64).to_le_bytes());
@@ -557,5 +619,102 @@ mod tests {
             edited.png
         );
         assert_eq!(std::fs::read(path).unwrap(), original);
+
+        // The active subset lacks '다', while another embedded copy of the
+        // exact face has it. A Bold face must never satisfy a Regular request.
+        let full_file = doc.add_object(Stream::new(
+            dictionary! {"Length1" => data.len() as i64},
+            data.clone(),
+        ));
+        let second_descriptor = doc.add_object(dictionary! {"Type"=>"FontDescriptor", "FontName"=>"UVWXYZ+PaperkitRecoveryOnly-Bold", "FontFile2"=>full_file});
+        let mut with_sibling = Vec::new();
+        doc.save_to(&mut with_sibling).unwrap();
+        assert!(matching_embedded(&with_sibling, "ABCDEF+PaperkitRecoveryOnly", "다").is_none());
+        doc.get_object_mut(second_descriptor)
+            .unwrap()
+            .as_dict_mut()
+            .unwrap()
+            .set("FontName", "UVWXYZ+PaperkitRecoveryOnly");
+        let second_descendant = doc.add_object(dictionary! {"Type"=>"Font", "Subtype"=>"CIDFontType2", "BaseFont"=>"UVWXYZ+PaperkitRecoveryOnly", "CIDSystemInfo"=>dictionary!{"Registry"=>Object::string_literal("Adobe"),"Ordering"=>Object::string_literal("Identity"),"Supplement"=>0}, "FontDescriptor"=>second_descriptor, "CIDToGIDMap"=>"Identity", "DW"=>1000});
+        let second_font = doc.add_object(dictionary! {"Type"=>"Font", "Subtype"=>"Type0", "BaseFont"=>"UVWXYZ+PaperkitRecoveryOnly", "Encoding"=>"Identity-H", "DescendantFonts"=>vec![Object::Reference(second_descendant)], "ToUnicode"=>unicode});
+        doc.get_object_mut(page)
+            .unwrap()
+            .as_dict_mut()
+            .unwrap()
+            .get_mut(b"Resources")
+            .unwrap()
+            .as_dict_mut()
+            .unwrap()
+            .get_mut(b"Font")
+            .unwrap()
+            .as_dict_mut()
+            .unwrap()
+            .set("F2", second_font);
+        let stream = doc
+            .get_object_mut(content)
+            .unwrap()
+            .as_stream_mut()
+            .unwrap();
+        let mut commands = stream.content.clone();
+        commands.extend_from_slice(
+            format!("\nBT /F2 16 Tf 20 60 Td <{:04X}> Tj ET", glyphs[0]).as_bytes(),
+        );
+        stream.set_content(commands);
+        with_sibling.clear();
+        doc.save_to(&mut with_sibling).unwrap();
+        let recovered_sibling =
+            matching_embedded(&with_sibling, "ABCDEF+PaperkitRecoveryOnly", "다").unwrap();
+        assert_eq!(recovered_sibling, data);
+        let sibling_path = directory.join("sibling.pdf");
+        std::fs::write(&sibling_path, &with_sibling).unwrap();
+        let sibling_page = engine
+            .render("sibling".into(), sibling_path.clone(), 0, 800)
+            .unwrap();
+        let sibling_group = sibling_page
+            .text
+            .groups
+            .iter()
+            .find(|g| g.can_flow)
+            .unwrap();
+        engine
+            .edit(
+                "sibling".into(),
+                0,
+                EditAction::FlowBlock {
+                    page: 0,
+                    group: sibling_group.id,
+                    text: "다나가".into(),
+                    width: Some(240.0),
+                    height: None,
+                },
+            )
+            .unwrap();
+        let changed = engine
+            .render("sibling".into(), sibling_path.clone(), 0, 800)
+            .unwrap();
+        assert!(changed
+            .text
+            .objects
+            .iter()
+            .any(|o| o.text.trim() == "다나가"));
+        assert!(changed.text.objects.iter().any(|o| o.text.trim() == "가"));
+        let saved = directory.join("sibling-saved.pdf");
+        engine
+            .edit(
+                "sibling".into(),
+                1,
+                EditAction::Save {
+                    path: saved.clone(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            engine
+                .render("sibling-reopened".into(), saved, 0, 800)
+                .unwrap()
+                .png,
+            changed.png
+        );
+        assert_eq!(std::fs::read(sibling_path).unwrap(), with_sibling);
     }
 }

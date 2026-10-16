@@ -11,6 +11,7 @@ import Markdown from "react-markdown";
 import remarkGfm from "remark-gfm";
 import { downloadUpdate, installUpdate } from "../lib/updater";
 import { approveAppExit } from "../lib/app-exit";
+import { PrivacyPolicy } from "./PrivacyPolicy";
 
 export function VersionDialog() {
   const [open, setOpen] = useState(false);
@@ -240,6 +241,9 @@ export function VersionDialog() {
               </div>
             </>
           )}
+          <footer className="mt-4 border-t border-stone-200 pt-4">
+            <PrivacyPolicy />
+          </footer>
         </DialogContent>
       </Dialog>
     </>

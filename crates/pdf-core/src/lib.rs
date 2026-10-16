@@ -19,5 +19,6 @@ pub mod text;
 
 mod move_stream;
 mod text_spacing;
+mod verification;
 
 pub mod alignment;

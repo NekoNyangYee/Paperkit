@@ -137,23 +137,20 @@ describe("file input UI → Zustand → IPC adapter (native IPC mocked)", () => 
     expect(image.getAttribute("src")).toBe("data:image/png;base64,NEW");
     expect(mocks.release).toHaveBeenCalledWith(original.id);
   });
-  it("keeps the selected file in the confirmation card until PDF open is clicked", async () => {
+  it("automatically opens the editor after the selected PDF is checked", async () => {
     mocks.open.mockResolvedValue(original.path);
     render(<App />);
     await waitFor(() => expect(useAppStore.getState().ready).toBe(true));
     fireEvent.click(screen.getByRole("button", { name: "파일 선택" }));
-    await screen.findByRole("heading", { name: "이 파일을 열까요?" });
-    expect(screen.getByText(original.name)).toBeTruthy();
-    expect(screen.getByText("1.0 KB")).toBeTruthy();
-    expect(screen.queryByText("PDF 미리보기 화면")).toBeNull();
+    await screen.findByText("PDF 미리보기 화면");
+    expect(useAppStore.getState().openedFileId).toBe(original.id);
     expect(mocks.invoke.mock.calls.some(([command]) => command === "render_selected_page")).toBe(
       false,
     );
-    fireEvent.click(screen.getByRole("button", { name: "PDF 열기" }));
     expect(screen.getByText("PDF 미리보기 화면")).toBeTruthy();
   });
 
-  it("replacing a selected file keeps the new file at the confirmation step", async () => {
+  it("automatically opens a replacement PDF after selection", async () => {
     mocks.invoke.mockImplementation(async (command, args) =>
       command === "synchronize_selection"
         ? snapshot(1, original)
@@ -163,10 +160,9 @@ describe("file input UI → Zustand → IPC adapter (native IPC mocked)", () => 
     render(<App />);
     await screen.findByText(original.name);
     fireEvent.click(screen.getByRole("button", { name: "다른 파일 선택" }));
-    await screen.findByText(replacement.name);
+    await screen.findByText("PDF 미리보기 화면");
     expect(screen.queryByText(original.name)).toBeNull();
-    expect(screen.queryByText("PDF 미리보기 화면")).toBeNull();
-    expect(screen.getByRole("button", { name: "PDF 열기" })).toBeTruthy();
+    expect(useAppStore.getState().openedFileId).toBe(replacement.id);
   });
   it("initializes once, selects a PDF and shows its first page without a clear button", async () => {
     mocks.open.mockResolvedValue(original.path);

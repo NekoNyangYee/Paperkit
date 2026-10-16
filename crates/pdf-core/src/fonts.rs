@@ -155,13 +155,18 @@ pub(crate) fn same_face_in_document(
         if validate_original(bytes, text).is_ok() {
             return Ok(bytes.to_vec());
         }
-        // Recover only explicit Unicode-to-original-outline mappings. No guessed font substitution.
-        if let Ok(pdf) = document.save_to_bytes() {
+    }
+    // Serialize once for both recovery and other subsets of the exact face.
+    if let Ok(pdf) = document.save_to_bytes() {
+        if let Some(bytes) = embedded {
             if let Some(recovered) = crate::font_recovery::recover(&pdf, bytes) {
                 if validate_original(&recovered, text).is_ok() {
                     return Ok(recovered);
                 }
             }
+        }
+        if let Some(bytes) = crate::font_recovery::matching_embedded(&pdf, name, text) {
+            return Ok(bytes);
         }
     }
     same_face(name, embedded, text)

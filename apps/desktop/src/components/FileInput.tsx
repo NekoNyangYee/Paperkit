@@ -149,7 +149,6 @@ export function FileInput() {
           </button>
         )}
       </div>
-      <p className="mt-4 text-xs text-stone-400">PDF 파일 1개 · 파일은 외부로 전송되지 않습니다</p>
       <div role="status" aria-live="polite">
         {busy && (
           <p className="mt-5 text-sm text-stone-500">

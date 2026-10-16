@@ -78,7 +78,7 @@ export const useAppStore = create<AppStore>((set, get) => {
         set({ phase: "error", error: errorMessage(cause) });
       }
     },
-    receive: (paths) => run("check", paths),
+    receive: (paths) => run("check", paths, true),
     replaceFile: (paths) => run("check", paths, true),
     clear: () => run("clear"),
     reportError: (cause) => set({ error: errorMessage(cause), phase: "error" }),

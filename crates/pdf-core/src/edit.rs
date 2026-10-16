@@ -487,6 +487,19 @@ fn replace_group(
         .iter()
         .find(|g| g.id == id)
         .ok_or(PreviewError::StaleObject)?;
+    if value.trim().is_empty()
+        && group.runs.iter().all(|run| {
+            run.object_start == 0
+                && text
+                    .objects
+                    .iter()
+                    .find(|o| o.id == run.object)
+                    .is_some_and(|o| run.end - run.start >= o.text.trim_end().chars().count())
+        })
+    {
+        let ids = group.runs.iter().map(|run| run.object).collect();
+        return crate::flow::delete_text(pdfium, original, index, &ids);
+    }
     if group.edit_blocked.is_some() {
         return Err(PreviewError::UnsupportedText);
     }
@@ -635,6 +648,14 @@ fn replace_with_bounds(
     font: Option<(&Path, &str)>,
     cell: Option<[f32; 4]>,
 ) -> Result<Vec<u8>, PreviewError> {
+    if value.is_some_and(|text| text.trim().is_empty()) {
+        return crate::flow::delete_text(
+            pdfium,
+            original,
+            index,
+            &std::collections::BTreeSet::from([id]),
+        );
+    }
     // All mutations happen on a private candidate. Any failure leaves the active document untouched.
     let mut candidate = pdfium
         .load_pdf_from_byte_vec(original.to_vec(), None)
@@ -824,7 +845,7 @@ fn replace_with_bounds(
         .iter()
         .find(|o| {
             if font_replaced {
-                o.text == value
+                o.text.trim_end_matches(' ') == value.trim_end_matches(' ')
                     && o.font == expected_font
                     && o.matrix
                         .iter()
@@ -836,7 +857,10 @@ fn replace_with_bounds(
         })
         .ok_or(PreviewError::VerificationFailed)?;
     let after_id = after.id;
-    if after.text != value
+    // PDFium adds terminal word spaces from neighbouring object positions.
+    // These are extraction separators, not changes to the stored glyphs.
+    // Keep the geometry, style and untouched-region pixel checks below.
+    if after.text.trim_end_matches(' ') != value.trim_end_matches(' ')
         || expected_font != after.font
         || before.color != after.color
         || (before.font_size - after.font_size).abs() > 0.01
@@ -846,7 +870,7 @@ fn replace_with_bounds(
             .zip(after.matrix)
             .any(|(a, b)| (a - b).abs() > 0.01)
     {
-        return Err(PreviewError::VerificationFailed);
+        return Err(PreviewError::ChangedTextMismatch);
     }
     // No automatic reflow. Font changes allow bounded bearing/height differences,
     // while the right edge stays within the original width (plus rounding tolerance).
@@ -963,9 +987,10 @@ fn replace_with_bounds(
         for object in old_remaining.iter_mut().chain(new_remaining.iter_mut()) {
             object.id = 0;
             object.font_object_id = 0;
+            object.text = object.text.trim_end_matches(' ').to_owned();
         }
         if old_objects.warning != new_objects.warning || old_remaining != new_remaining {
-            return Err(PreviewError::VerificationFailed);
+            return Err(PreviewError::UnchangedTextModified);
         }
         let old_bitmap = old_page
             .render_with_config(&config)

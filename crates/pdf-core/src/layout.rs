@@ -597,6 +597,7 @@ mod tests {
                 font: "Courier".into(),
                 font_object_id: id,
                 font_size: 10.0,
+                font_weight: Some(400),
                 color: [0, 0, 0, 255],
                 matrix: [1.0, 0.0, 0.0, 1.0, x, y],
                 bounds: quad(r),

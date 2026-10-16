@@ -30,6 +30,365 @@ fn pdf(stream: &str, rotation: i32) -> Vec<u8> {
 
 #[test]
 #[ignore = "requires bundled Windows PDFium"]
+fn consecutive_spaces_survive_block_edit_save_and_reopen() {
+    let resources =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/resources");
+    let engine = PreviewEngine::start(resources.join("pdfium/pdfium.dll")).unwrap();
+    let path = std::env::temp_dir().join(format!("paperkit-spaces-{}.pdf", std::process::id()));
+    let saved = path.with_extension("saved.pdf");
+    let original = pdf(
+        "BT /F1 12 Tf 40 700 Td (Original) Tj ET\nBT /F1 12 Tf 40 400 Td (KEEP) Tj ET\n",
+        0,
+    );
+    fs::write(&path, &original).unwrap();
+    let before = engine
+        .render("spaces".into(), path.clone(), 0, 800)
+        .unwrap();
+    let group = before
+        .text
+        .groups
+        .iter()
+        .find(|g| g.text.contains("Original"))
+        .unwrap();
+    engine
+        .edit(
+            "spaces".into(),
+            0,
+            EditAction::FlowBlock {
+                page: 0,
+                group: group.id,
+                text: "Word  with   spaces  1".into(),
+                width: None,
+                height: None,
+            },
+        )
+        .unwrap();
+    let edited = engine
+        .render("spaces".into(), path.clone(), 0, 800)
+        .unwrap();
+    engine
+        .edit(
+            "spaces".into(),
+            1,
+            EditAction::Save {
+                path: saved.clone(),
+            },
+        )
+        .unwrap();
+    let document = lopdf::Document::load(&saved).unwrap();
+    let extracted = document.extract_text(&[1]).unwrap();
+    assert!(
+        extracted.contains("Word  with   spaces  1"),
+        "{extracted:?}"
+    );
+    assert!(extracted.contains("KEEP"));
+    engine.edit("spaces".into(), 1, EditAction::Undo).unwrap();
+    assert_eq!(
+        engine
+            .render("spaces".into(), path.clone(), 0, 800)
+            .unwrap()
+            .png,
+        before.png
+    );
+    let reopened = engine
+        .render("spaces-saved".into(), saved.clone(), 0, 800)
+        .unwrap();
+    assert_eq!(edited.png, reopened.png);
+    assert_eq!(fs::read(&path).unwrap(), original);
+    fs::remove_file(path).unwrap();
+    fs::remove_file(saved).unwrap();
+}
+
+#[test]
+#[ignore = "requires bundled Windows PDFium"]
+fn deletes_whole_block_without_original_font_and_saves_blank_page() {
+    let resources =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/resources");
+    let engine = PreviewEngine::start(resources.join("pdfium/pdfium.dll")).unwrap();
+    let path = std::env::temp_dir().join(format!(
+        "paperkit-delete-missing-font-{}.pdf",
+        std::process::id()
+    ));
+    let saved = path.with_extension("saved.pdf");
+    let mut document =
+        lopdf::Document::load_mem(&pdf("BT /F1 12 Tf 40 700 Td (DELETE ALL) Tj ET\n", 0)).unwrap();
+    document
+        .get_object_mut((5, 0))
+        .unwrap()
+        .as_dict_mut()
+        .unwrap()
+        .set(
+            "BaseFont",
+            lopdf::Object::Name(b"PaperkitMissingFace".to_vec()),
+        );
+    let descriptor = document.add_object(lopdf::dictionary! {"Type"=>"FontDescriptor", "FontName"=>"PaperkitMissingFace", "Flags"=>33, "FontBBox"=>vec![0.into(), (-250).into(), 600.into(), 1000.into()], "Ascent"=>800, "Descent"=>-200, "CapHeight"=>700, "ItalicAngle"=>0, "StemV"=>80});
+    let font = document
+        .get_object_mut((5, 0))
+        .unwrap()
+        .as_dict_mut()
+        .unwrap();
+    font.set("FontDescriptor", descriptor);
+    font.set("FirstChar", 0);
+    font.set("LastChar", 255);
+    font.set("Widths", vec![lopdf::Object::Integer(600); 256]);
+    let mut original = Vec::new();
+    document.save_to(&mut original).unwrap();
+    fs::write(&path, &original).unwrap();
+    let before = engine
+        .render("delete".into(), path.clone(), 0, 800)
+        .unwrap();
+    let group = before.text.groups.iter().find(|g| g.can_flow).unwrap();
+    engine
+        .edit(
+            "delete".into(),
+            0,
+            EditAction::FlowBlock {
+                page: 0,
+                group: group.id,
+                text: String::new(),
+                width: None,
+                height: None,
+            },
+        )
+        .unwrap();
+    let blank = engine
+        .render("delete".into(), path.clone(), 0, 800)
+        .unwrap();
+    assert!(blank.text.objects.is_empty());
+    engine
+        .edit(
+            "delete".into(),
+            1,
+            EditAction::Save {
+                path: saved.clone(),
+            },
+        )
+        .unwrap();
+    engine.edit("delete".into(), 1, EditAction::Undo).unwrap();
+    assert_eq!(
+        engine
+            .render("delete".into(), path.clone(), 0, 800)
+            .unwrap()
+            .png,
+        before.png
+    );
+    assert_eq!(
+        engine
+            .render("saved".into(), saved.clone(), 0, 800)
+            .unwrap()
+            .png,
+        blank.png
+    );
+    assert_eq!(fs::read(&path).unwrap(), original);
+    fs::remove_file(path).unwrap();
+    fs::remove_file(saved).unwrap();
+}
+
+#[test]
+#[ignore = "requires bundled Windows PDFium"]
+fn font_change_and_empty_object_save_with_precise_neighbors() {
+    let resources =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/resources");
+    let engine = PreviewEngine::start_with_fonts(
+        resources.join("pdfium/pdfium.dll"),
+        resources.join("fonts"),
+    )
+    .unwrap();
+    let root = std::env::temp_dir().join(format!("paperkit-basic-edit-{}", std::process::id()));
+    fs::create_dir_all(&root).unwrap();
+    let source = root.join("source.pdf");
+    let original = pdf("BT /F1 12 Tf 40 700 Td (EDIT ME) Tj ET\nBT /F1 12 Tf 0.25 Tc 0.9999997 0 0 1.0000003 40.1234567 600.7654321 Tm (KEEP THIS) Tj ET\nBT /F1 12 Tf 0.25 Tc 0.9999997 0 0 1.0000003 40.1234567 600.7654321 Tm (KEEP THIS) Tj ET\n", 0);
+    fs::write(&source, &original).unwrap();
+    for (name, action) in [
+        (
+            "font",
+            EditAction::ChangeFont {
+                page: 0,
+                object: 0,
+                font: "pretendard-bold".into(),
+            },
+        ),
+        (
+            "delete",
+            EditAction::Replace {
+                page: 0,
+                object: 0,
+                text: String::new(),
+            },
+        ),
+    ] {
+        let before = engine.render(name.into(), source.clone(), 0, 800).unwrap();
+        engine.edit(name.into(), 0, action).unwrap();
+        let after = engine.render(name.into(), source.clone(), 0, 800).unwrap();
+        assert!(after
+            .text
+            .objects
+            .iter()
+            .any(|o| o.text.trim() == "KEEP THIS"));
+        if name == "delete" {
+            assert_eq!(after.text.objects.len(), 2);
+        } else {
+            assert!(after.text.objects.iter().any(|o| o.font.contains("Bold")));
+        }
+        let saved = root.join(format!("{name}.pdf"));
+        engine
+            .edit(
+                name.into(),
+                1,
+                EditAction::Save {
+                    path: saved.clone(),
+                },
+            )
+            .unwrap();
+        engine.edit(name.into(), 1, EditAction::Undo).unwrap();
+        assert_eq!(
+            engine
+                .render(name.into(), source.clone(), 0, 800)
+                .unwrap()
+                .png,
+            before.png
+        );
+        assert_eq!(
+            engine
+                .render(format!("{name}-saved"), saved.clone(), 0, 800)
+                .unwrap()
+                .png,
+            after.png
+        );
+        fs::remove_file(saved).unwrap();
+    }
+    assert_eq!(fs::read(&source).unwrap(), original);
+    fs::remove_file(source).unwrap();
+    fs::remove_dir(root).unwrap();
+}
+
+#[test]
+#[ignore = "requires bundled Windows PDFium"]
+fn edits_object_without_rejecting_generated_word_spaces() {
+    let resources =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/resources");
+    let engine = PreviewEngine::start(resources.join("pdfium/pdfium.dll")).unwrap();
+    let path = std::env::temp_dir().join(format!("paperkit-word-space-{}.pdf", std::process::id()));
+    fs::write(
+        &path,
+        pdf(
+            "BT /F1 12 Tf 40 700 Td (HELLO) Tj ET\nBT /F1 12 Tf 100 700 Td (WORLD) Tj ET\n",
+            0,
+        ),
+    )
+    .unwrap();
+    let before = engine
+        .render("word-space".into(), path.clone(), 0, 800)
+        .unwrap();
+    let object = before
+        .text
+        .objects
+        .iter()
+        .find(|o| o.text.trim() == "HELLO")
+        .unwrap();
+    engine
+        .edit(
+            "word-space".into(),
+            0,
+            EditAction::Replace {
+                page: 0,
+                object: object.id,
+                text: "HI".into(),
+            },
+        )
+        .unwrap();
+    let after = engine
+        .render("word-space".into(), path.clone(), 0, 800)
+        .unwrap();
+    assert!(after.text.objects.iter().any(|o| o.text.trim() == "HI"));
+    assert!(after.text.objects.iter().any(|o| o.text.trim() == "WORLD"));
+    engine
+        .edit("word-space".into(), 1, EditAction::Undo)
+        .unwrap();
+    assert_eq!(
+        engine
+            .render("word-space".into(), path.clone(), 0, 800)
+            .unwrap()
+            .png,
+        before.png
+    );
+    engine.release("word-space".into()).unwrap();
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+#[ignore = "requires bundled Windows PDFium"]
+fn edits_text_preserving_fractional_unchanged_objects() {
+    let resources =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/resources");
+    let engine = PreviewEngine::start(resources.join("pdfium/pdfium.dll")).unwrap();
+    let path = std::env::temp_dir().join(format!("paperkit-overprint-{}.pdf", std::process::id()));
+    let original = pdf("BT /F1 12 Tf 40 700 Td (Original text) Tj ET\nq .12345678 0 0 .12345678 40 300 cm BT /F1 12 Tf (KEEP) Tj ET Q\n", 0);
+    fs::write(&path, &original).unwrap();
+    let before = engine
+        .render("overprint".into(), path.clone(), 0, 800)
+        .unwrap();
+    let group = before
+        .text
+        .groups
+        .iter()
+        .find(|g| g.can_flow && g.text.contains("Original"))
+        .unwrap();
+    engine
+        .edit(
+            "overprint".into(),
+            0,
+            EditAction::FlowBlock {
+                page: 0,
+                group: group.id,
+                text: "Changed text".into(),
+                width: None,
+                height: None,
+            },
+        )
+        .unwrap();
+    let after = engine
+        .render("overprint".into(), path.clone(), 0, 800)
+        .unwrap();
+    assert_eq!(
+        after
+            .text
+            .objects
+            .iter()
+            .filter(|o| o.text.trim() == "KEEP")
+            .count(),
+        1
+    );
+    assert!(after
+        .text
+        .objects
+        .iter()
+        .any(|o| o.text.trim() == "Changed text"));
+    let saved = path.with_extension("saved.pdf");
+    engine
+        .edit(
+            "overprint".into(),
+            1,
+            EditAction::Save {
+                path: saved.clone(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        engine
+            .render("overprint-reopened".into(), saved.clone(), 0, 800)
+            .unwrap()
+            .png,
+        after.png
+    );
+    assert_eq!(fs::read(&path).unwrap(), original);
+    engine.release("overprint-reopened".into()).unwrap();
+    fs::remove_file(saved).unwrap();
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+#[ignore = "requires bundled Windows PDFium"]
 fn edits_scaled_text_and_roundtrips_without_rejecting_float_roundoff() {
     let resources =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/resources");

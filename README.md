@@ -40,8 +40,7 @@ PDF는 문서마다 내부 구조가 달라 편집 가능한 범위에 차이가
 
 ## 개발 및 문의
 
-- [개발 환경과 실행 방법](docs/development.md)
-- [개발 체크리스트](docs/development-checklist.md)
+- [개인정보 처리방침](apps/desktop/src/content/privacy-policy.md)
 - [오류 제보 및 기능 제안](https://github.com/NekoNyangYee/Paperkit/issues)
 
 Tauri, React, TypeScript, Rust, PDFium으로 만들었습니다.

@@ -51,23 +51,17 @@ pub fn inspect_pdf_file(path: &Path) -> Result<PdfFileInfo, FileCheckError> {
     if metadata.len() == 0 {
         return Err(FileCheckError::EmptyFile);
     }
-    // Conservative MVP: header at offset zero, PDF 1.0..1.7 or 2.0, then EOL.
-    // Read only nine bytes, not the entire document.
-    let mut header = [0; 9];
-    file.read_exact(&mut header).map_err(|error| {
-        if error.kind() == io::ErrorKind::UnexpectedEof {
-            FileCheckError::InvalidHeader
-        } else {
-            error.into()
-        }
-    })?;
-    let supported = (header[5] == b'1' && (b'0'..=b'7').contains(&header[7]))
-        || (header[5] == b'2' && header[7] == b'0');
-    if &header[..5] != b"%PDF-"
-        || header[6] != b'.'
-        || !supported
-        || !matches!(header[8], b'\r' | b'\n')
-    {
+    // Match PDFium's tolerant opening: some producers prepend a BOM or
+    // transport bytes. This is only a bounded sniff; PDFium validates the file.
+    let mut prefix = Vec::new();
+    file.by_ref().take(1024).read_to_end(&mut prefix)?;
+    if !prefix.windows(9).any(|header| {
+        &header[..5] == b"%PDF-"
+            && header[6] == b'.'
+            && ((header[5] == b'1' && (b'0'..=b'7').contains(&header[7]))
+                || (header[5] == b'2' && header[7] == b'0'))
+            && matches!(header[8], b'\r' | b'\n')
+    }) {
         return Err(FileCheckError::InvalidHeader);
     }
     Ok(PdfFileInfo {
@@ -125,6 +119,14 @@ mod tests {
         assert!(inspect_pdf_file(&fixture.write("v2.pdf", b"%PDF-2.0\n")).is_ok());
     }
     #[test]
+    fn accepts_bom_prefixed_pdf_without_changing_bytes() {
+        let fixture = Fixture::new();
+        let bytes = b"\xef\xbb\xbf%PDF-1.7\nbody";
+        let path = fixture.write("prefixed.pdf", bytes);
+        assert!(inspect_pdf_file(&path).is_ok());
+        assert_eq!(fs::read(path).unwrap(), bytes);
+    }
+    #[test]
     fn rejects_missing_directory_empty_and_wrong_extension() {
         let fixture = Fixture::new();
         assert_eq!(
@@ -152,7 +154,6 @@ mod tests {
             b"%PDF-",
             b"%PDF-x.y\n",
             b"%PDF-1.7x",
-            b" %PDF-1.7\n",
         ] {
             assert_eq!(
                 inspect_pdf_file(&fixture.write("fake.pdf", bytes)).unwrap_err(),

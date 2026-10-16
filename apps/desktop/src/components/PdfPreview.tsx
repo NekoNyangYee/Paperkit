@@ -3,6 +3,7 @@ import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isTauri, invoke } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
 import {
+  Bold,
   AlignLeft,
   AlignCenter,
   AlignRight,
@@ -44,7 +45,16 @@ import { PageSidebar } from "./PageSidebar";
 import { ZoomSurface } from "./ZoomSurface";
 import { TextPage } from "./TextPage";
 import { editorFont, clearOriginalFonts } from "../lib/editor-font";
-import { textBySource } from "../lib/font-matching";
+import { textBySource, fallbackCandidates } from "../lib/font-matching";
+import { selectionStyle, weightLabel } from "../lib/font-style";
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from "./ui/dialog";
+
+function originalFontIssue(cause: unknown) {
+  const message = errorMessage(cause);
+  return /^(원본 글꼴에 입력한 문자가 없습니다|원본 글꼴 데이터를 사용할 수 없습니다)/.test(
+    message,
+  );
+}
 
 export function PdfPreview({ file }: { file: FileInfo }) {
   const [fontGeneration, setFontGeneration] = useState(0);
@@ -73,6 +83,7 @@ export function PdfPreview({ file }: { file: FileInfo }) {
   const [page, setPage] = useState<PreviewPage | null>(null);
   const [pageCount, setPageCount] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
+  const [loadPercent, setLoadPercent] = useState(0);
   const [error, setError] = useState<string | null>(null);
   const [retry, setRetry] = useState(0);
   const [editState, setEditState] = useState<EditState>({
@@ -85,6 +96,9 @@ export function PdfPreview({ file }: { file: FileInfo }) {
   const [inlineEditing, setInlineEditing] = useState(false);
   const [blockSize, setBlockSize] = useState<{ width: number; height: number } | null>(null);
   const [draft, setDraft] = useState("");
+  const [fontResolution, setFontResolution] = useState(false);
+  const [fontWarning, setFontWarning] = useState<string | null>(null);
+  const [replacementFont, setReplacementFont] = useState("pretendard");
   const [busy, setBusy] = useState(false);
   const [editError, setEditError] = useState<string | null>(null);
   const [notice, setNotice] = useState<string | null>(null);
@@ -100,6 +114,134 @@ export function PdfPreview({ file }: { file: FileInfo }) {
   const clear = useAppStore((state) => state.clear);
   const selectionError = useAppStore((state) => state.error);
   const clearing = useAppStore((state) => state.phase === "clearing");
+
+  const detectedStyle = selectionStyle(selected, page?.text.objects ?? [], fonts);
+  const styleDisabled =
+    busy ||
+    loading ||
+    preparingEdit ||
+    !selected ||
+    selected.fontChangeBlocked !== null ||
+    (unsavedDraft && !selected.group?.canFlow);
+  const toggleWeight = detectedStyle.weight !== null && detectedStyle.weight >= 600 ? 400 : 700;
+  const toggleVariant = detectedStyle.variants.find((variant) => variant.weight === toggleWeight);
+
+  function changeSelectedFont(font: string) {
+    if (!selected || styleDisabled || composing.current || font === "current") return;
+    const alignment = selected.alignment ?? selected.originalAlignment;
+    void run(
+      selected.group && alignment
+        ? {
+            kind: "alignBlock",
+            page: pageIndex,
+            groups: selected.mergedGroups ?? [selected.group.id],
+            text: draft,
+            alignment,
+            font,
+            ...(blockSize ?? {}),
+          }
+        : selected.group
+          ? {
+              kind: "changeBlockFont",
+              page: pageIndex,
+              group: selected.group.id,
+              font,
+              ...(unsavedDraft
+                ? { text: draft, width: blockSize?.width, height: blockSize?.height }
+                : {}),
+            }
+          : { kind: "changeFont", page: pageIndex, object: selected.id, font },
+    );
+  }
+
+  async function validateDraftFont(target: TextSelection, value: string) {
+    if (!value.trim()) return;
+    for (const [id, text] of textBySource(target, value)) {
+      const source = page!.text.objects.find((o) => o.id === id)!;
+      if (/^(Helvetica|Courier|Times)(-|$)/.test(source.font) && /^[\x20-\x7e]*$/.test(text))
+        continue;
+      const data = await invoke("document_font", {
+        fileId: file.id,
+        revision: editState.revision,
+        pageIndex,
+        objectId: id,
+        text,
+      });
+      if (typeof data !== "string") throw new Error("글꼴 검증 응답이 올바르지 않습니다.");
+    }
+  }
+
+  useEffect(() => {
+    setFontWarning(null);
+    if (!inlineEditing || !unsavedDraft || !selected || busy || loading || fontResolution) return;
+    if (!(selected.group?.canFlow || (!selected.group && selected.fontChangeBlocked === null)))
+      return;
+    let active = true;
+    const timer = setTimeout(() => {
+      if (composing.current || working.current) return;
+      void validateDraftFont(selected, draft).catch((cause) => {
+        if (active && originalFontIssue(cause))
+          setFontWarning("원본 글꼴로 반영할 수 없는 문자가 있습니다. 입력은 유지됩니다.");
+      });
+    }, 800);
+    return () => {
+      active = false;
+      clearTimeout(timer);
+    };
+  }, [
+    draft,
+    selected,
+    inlineEditing,
+    busy,
+    loading,
+    fontResolution,
+    fontGeneration,
+    editState.revision,
+    pageIndex,
+  ]);
+
+  async function applyReplacementFont() {
+    if (!selected || working.current || !fonts.some((font) => font.id === replacementFont)) return;
+    setFontResolution(false);
+    const text = draft;
+    const result = await run(
+      selected.group && selected.alignment
+        ? {
+            kind: "alignBlock",
+            page: pageIndex,
+            groups: selected.mergedGroups ?? [selected.group.id],
+            text,
+            alignment: selected.alignment,
+            font: replacementFont,
+            ...(blockSize ?? {}),
+          }
+        : {
+            kind: "flexibleEdit",
+            page: pageIndex,
+            groups: selected.group ? (selected.mergedGroups ?? [selected.group.id]) : [],
+            ...(!selected.group ? { object: selected.id } : {}),
+            text,
+            fonts: Object.fromEntries(
+              [...textBySource(selected, text)].map(([id]) => [id, replacementFont]),
+            ),
+            ...(blockSize ?? {}),
+          },
+    );
+    if (result) {
+      setBlockSize(null);
+      setFontWarning(null);
+    }
+  }
+
+  function resolveFont(value = draft) {
+    setDraft(value);
+    setEditError(null);
+    setNotice(null);
+    setReplacementFont(
+      fallbackCandidates(selected?.font ?? "", fonts)[0]?.id ?? fonts[0]?.id ?? "",
+    );
+    setFontResolution(true);
+  }
 
   useEffect(() => {
     const area = pageArea.current;
@@ -155,6 +297,7 @@ export function PdfPreview({ file }: { file: FileInfo }) {
     const samePage = renderedLocation.current === location;
     renderContext.current = context;
     setLoading(true);
+    setLoadPercent(0);
     setError(null);
     if (!samePage) {
       setPage(null);
@@ -163,8 +306,17 @@ export function PdfPreview({ file }: { file: FileInfo }) {
     const timer = setTimeout(
       () => {
         // Display zoom is independent of the bounded native bitmap size.
-        void renderPage(file.id, pageIndex, Math.max(300, Math.min(1600, (800 * zoom) / 100)))
+        void renderPage(
+          file.id,
+          pageIndex,
+          Math.max(300, Math.min(1600, (800 * zoom) / 100)),
+          (percent) => {
+            if (!disposed) setLoadPercent((previous) => Math.max(previous, percent));
+          },
+        )
           .then(async (result) => {
+            if (disposed) return;
+            setLoadPercent(95);
             // Decode before replacing the animated old bitmap to avoid a blank frame.
             if (typeof Image.prototype.decode === "function") {
               const image = new Image();
@@ -172,6 +324,7 @@ export function PdfPreview({ file }: { file: FileInfo }) {
               await image.decode();
             }
             if (disposed) return;
+            setLoadPercent(100);
             renderedLocation.current = location;
             setPage(result);
             setSelected(null);
@@ -494,25 +647,10 @@ export function PdfPreview({ file }: { file: FileInfo }) {
       working.current = true;
       setBusy(true);
       try {
-        for (const [id, text] of textBySource(selected, value)) {
-          const source = page!.text.objects.find((o) => o.id === id)!;
-          try {
-            if (/^(Helvetica|Courier|Times)(-|$)/.test(source.font) && /^[\x20-\x7e]*$/.test(text))
-              continue;
-            const data = await invoke("document_font", {
-              fileId: file.id,
-              revision: editState.revision,
-              pageIndex,
-              objectId: id,
-              text,
-            });
-            if (typeof data !== "string") throw new Error("글꼴 검증 응답이 올바르지 않습니다.");
-          } catch (cause) {
-            throw cause;
-          }
-        }
+        await validateDraftFont(selected, value);
       } catch (cause) {
-        setEditError(errorMessage(cause));
+        if (originalFontIssue(cause)) resolveFont(value);
+        else setEditError(errorMessage(cause));
         return null;
       } finally {
         working.current = false;
@@ -553,7 +691,10 @@ export function PdfPreview({ file }: { file: FileInfo }) {
       if (result) setBlockSize(null);
       return result;
     }
-    if (selected.editBlocked) {
+    if (
+      selected.editBlocked &&
+      !(value.trim() === "" && !selected.group && selected.fontChangeBlocked === null)
+    ) {
       setEditError(
         "원본 글꼴을 사용할 수 없습니다. 글꼴 메뉴에서 사용할 글꼴을 직접 선택해 주세요.",
       );
@@ -730,6 +871,58 @@ export function PdfPreview({ file }: { file: FileInfo }) {
   return (
     <main className="flex h-full select-none overflow-hidden">
       {discardDialog}
+      <Dialog open={fontResolution} onOpenChange={setFontResolution}>
+        <DialogContent
+          className="w-[min(92vw,540px)] p-6"
+          onCloseAutoFocus={(event) => {
+            event.preventDefault();
+            document.querySelector<HTMLElement>('[role="textbox"][aria-label="내용"]')?.focus();
+          }}
+        >
+          <DialogTitle className="text-lg font-semibold">반영할 글꼴을 선택해 주세요</DialogTitle>
+          <DialogDescription className="mt-3 text-sm leading-6 text-stone-600">
+            내장 글꼴과 사용 가능한 동일 글꼴로 입력한 문자를 표현하지 못했습니다. 입력 내용은
+            유지됩니다. 대체 글꼴로 반영하면 선택한 텍스트 전체의 글꼴과 줄바꿈이 달라질 수
+            있습니다.
+          </DialogDescription>
+          <label className="mt-4 block text-sm">
+            대체 글꼴
+            <select
+              aria-label="대체 글꼴"
+              value={replacementFont}
+              onChange={(event) => setReplacementFont(event.target.value)}
+              className="mt-2 w-full rounded-lg border p-2"
+            >
+              {fonts.map((font) => (
+                <option key={font.id} value={font.id}>
+                  {font.name}
+                </option>
+              ))}
+            </select>
+          </label>
+          <div className="mt-6 flex flex-wrap justify-end gap-2">
+            <button className="dialog-button" onClick={() => setFontResolution(false)}>
+              계속 편집
+            </button>
+            <button
+              className="dialog-button"
+              onClick={() => {
+                setFontResolution(false);
+                void importOriginalFont();
+              }}
+            >
+              원본 글꼴 불러오기
+            </button>
+            <button
+              className="dialog-button bg-emerald-900 text-white"
+              disabled={busy || !replacementFont || selected?.fontChangeBlocked !== null}
+              onClick={() => void applyReplacementFont()}
+            >
+              대체 글꼴로 반영
+            </button>
+          </div>
+        </DialogContent>
+      </Dialog>
       {pageCount !== null && (
         <PageSidebar
           key={file.id}
@@ -947,6 +1140,44 @@ export function PdfPreview({ file }: { file: FileInfo }) {
                   )}
                 </select>
               </label>
+              <div className="flex items-center gap-2" role="group" aria-label="글꼴 굵기">
+                <IconButton
+                  icon={Bold}
+                  label="굵게"
+                  aria-pressed={
+                    detectedStyle.mixed
+                      ? "mixed"
+                      : detectedStyle.weight !== null && detectedStyle.weight >= 600
+                  }
+                  disabled={styleDisabled || !toggleVariant}
+                  title={
+                    toggleVariant ? "굵게 / 보통" : "동일 글꼴의 보통 또는 굵은 서체가 필요합니다."
+                  }
+                  onClick={() => {
+                    if (toggleVariant) changeSelectedFont(toggleVariant.id);
+                  }}
+                />
+                <select
+                  aria-label="굵기"
+                  className="rounded-lg border border-stone-200 bg-white px-2 py-1 text-sm disabled:opacity-40"
+                  value="current"
+                  disabled={styleDisabled || !detectedStyle.variants.length}
+                  onChange={(event) => changeSelectedFont(event.target.value)}
+                >
+                  <option value="current" disabled>
+                    {detectedStyle.mixed
+                      ? "혼합 굵기"
+                      : detectedStyle.weight === null
+                        ? "굵기 정보 없음"
+                        : weightLabel(detectedStyle.weight)}
+                  </option>
+                  {detectedStyle.variants.map((variant) => (
+                    <option key={variant.id} value={variant.id}>
+                      {weightLabel(variant.weight)}
+                    </option>
+                  ))}
+                </select>
+              </div>
               <div className="flex items-center gap-1" role="group" aria-label="텍스트 정렬">
                 {(
                   [
@@ -1102,6 +1333,17 @@ export function PdfPreview({ file }: { file: FileInfo }) {
             )}
           </div>
         )}
+        {fontWarning && (
+          <div
+            role="status"
+            className="flex flex-wrap items-center justify-between gap-2 bg-amber-50 px-6 py-2 text-sm text-amber-900"
+          >
+            <span>{fontWarning}</span>
+            <button className="dialog-button" onClick={() => resolveFont()}>
+              반영 방법 선택
+            </button>
+          </div>
+        )}
         {preparingEdit && (
           <p role="status" className="px-6 py-2 text-sm text-emerald-700">
             원본 글꼴을 준비하고 있습니다…
@@ -1131,12 +1373,31 @@ export function PdfPreview({ file }: { file: FileInfo }) {
           ref={pageArea}
           aria-label="PDF 페이지"
           aria-busy={loading}
-          className="min-h-0 min-w-0 flex-1 overflow-auto p-6 [overflow-anchor:none]"
+          className="relative min-h-0 min-w-0 flex-1 overflow-auto p-6 [overflow-anchor:none]"
         >
-          {loading && !page && (
-            <p role="status" className="py-24 text-center text-sm text-stone-500">
-              PDF 페이지를 불러오고 있습니다…
-            </p>
+          {loading && (
+            <div className="absolute right-3 top-3 z-20 w-72 max-w-[calc(100%-1.5rem)] rounded-xl bg-white p-4 text-sm text-stone-600 shadow-sm">
+              <div className="mb-2 flex items-center justify-between gap-4" role="status">
+                <span>{pageIndex + 1}페이지 준비 중</span>
+                <span>{loadPercent}%</span>
+              </div>
+              <progress
+                aria-label="페이지 로딩 진행률"
+                max={100}
+                value={loadPercent}
+                className="h-2 w-full accent-emerald-700"
+              />
+              <p className="mt-2 text-xs text-stone-500">
+                {loadPercent < 15
+                  ? "처리 대기"
+                  : loadPercent < 40
+                    ? "PDF 읽는 중"
+                    : loadPercent < 85
+                      ? "페이지와 글꼴 분석 중"
+                      : "화면 준비 중"}{" "}
+                · 단계별 진행률
+              </p>
+            </div>
           )}
           {error && (
             <IconButton

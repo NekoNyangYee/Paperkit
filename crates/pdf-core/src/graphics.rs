@@ -139,25 +139,14 @@ pub(crate) fn edit(
         if a.width() != b.width() || a.height() != b.height() {
             return Err(PreviewError::VerificationFailed);
         }
-        for (n, (x, y)) in a
-            .as_rgba_bytes()
-            .chunks_exact(4)
-            .zip(b.as_rgba_bytes().chunks_exact(4))
-            .enumerate()
-        {
-            let px = n as i32 % a.width();
-            let py = n as i32 / a.width();
-            if x != y
-                && (i != index
-                    || !regions.iter().any(|q| {
-                        px >= q.iter().map(|p| p[0]).min().unwrap() - 3
-                            && px <= q.iter().map(|p| p[0]).max().unwrap() + 3
-                            && py >= q.iter().map(|p| p[1]).min().unwrap() - 3
-                            && py <= q.iter().map(|p| p[1]).max().unwrap() + 3
-                    }))
-            {
-                return Err(PreviewError::VerificationFailed);
-            }
+        let allowed = if i == index { regions.as_slice() } else { &[] };
+        if !crate::verification::unchanged_outside(
+            &a.as_rgba_bytes(),
+            &b.as_rgba_bytes(),
+            a.width() as usize,
+            allowed,
+        ) {
+            return Err(PreviewError::OutsideEditModified);
         }
     }
     Ok(bytes)

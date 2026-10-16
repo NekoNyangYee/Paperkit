@@ -130,7 +130,29 @@ fn native_load_render_navigate_cache_release_and_errors() {
         String::from_utf8_lossy(&generator.stdout)
     );
     let engine = PreviewEngine::start(library).unwrap();
+    let prefixed_path = directory.join("prefixed.pdf");
+    let prefixed = [b"\xef\xbb\xbf".as_slice(), original.as_slice()].concat();
+    fs::write(&prefixed_path, &prefixed).unwrap();
+    pdf_core::document::inspect_pdf_file(&prefixed_path).unwrap();
+    let (progress_send, progress_receive) = std::sync::mpsc::channel();
+    let prefixed_page = engine
+        .render_with_progress(
+            "prefixed".into(),
+            prefixed_path.clone(),
+            0,
+            600,
+            Some(Box::new(move |percent| {
+                progress_send.send(percent).unwrap();
+            })),
+        )
+        .unwrap();
+    assert_eq!(
+        progress_receive.iter().collect::<Vec<_>>(),
+        vec![15, 40, 85]
+    );
+    assert_eq!(fs::read(prefixed_path).unwrap(), prefixed);
     let first = engine.render("one".into(), path.clone(), 0, 600).unwrap();
+    assert_eq!(prefixed_page.png, first.png);
     assert_eq!(
         (
             first.page_count,

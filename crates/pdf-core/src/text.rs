@@ -10,6 +10,7 @@ pub struct TextObject {
     /// Page-local representative object for the same reusable font; never a native handle.
     pub font_object_id: usize,
     pub font_size: f32,
+    pub font_weight: Option<u32>,
     pub color: [u8; 4],
     pub matrix: [f32; 6],
     pub bounds: [[f32; 2]; 4],
@@ -214,6 +215,35 @@ fn extract_impl(
                     id
                 },
                 font_size: text.unscaled_font_size().value,
+                font_weight: if prepare_fonts {
+                    // PDFium can report a coarse descriptor weight (e.g. 600 for
+                    // a 700 face). Prefer the reusable font's actual OS/2 weight.
+                    font_bytes
+                        .get(&font.token())
+                        .and_then(|bytes| bytes.as_ref())
+                        .and_then(|bytes| ttf_parser::Face::parse(bytes, 0).ok())
+                        .filter(|face| face.tables().os2.is_some())
+                        .map(|face| u32::from(face.weight().to_number()))
+                        .or_else(|| {
+                            font.weight()
+                                .ok()
+                                .map(|weight| match weight {
+                                    PdfFontWeight::Weight100 => 100,
+                                    PdfFontWeight::Weight200 => 200,
+                                    PdfFontWeight::Weight300 => 300,
+                                    PdfFontWeight::Weight400Normal => 400,
+                                    PdfFontWeight::Weight500 => 500,
+                                    PdfFontWeight::Weight600 => 600,
+                                    PdfFontWeight::Weight700Bold => 700,
+                                    PdfFontWeight::Weight800 => 800,
+                                    PdfFontWeight::Weight900 => 900,
+                                    PdfFontWeight::Custom(value) => value,
+                                })
+                                .filter(|value| (100..=900).contains(value))
+                        })
+                } else {
+                    None
+                },
                 color: [c.red(), c.green(), c.blue(), c.alpha()],
                 matrix,
                 bounds,

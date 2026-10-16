@@ -58,6 +58,8 @@ fn message(error: PreviewError) -> String {
         PreviewError::VerificationFailed => {
             "변경 결과를 검증하지 못했습니다. 작업을 반영하지 않았습니다."
         }
+        PreviewError::ChangedTextMismatch => "저장된 PDF의 글자 또는 서식이 입력한 내용과 일치하지 않아 반영하지 않았습니다. 입력은 유지했습니다. 다른 글꼴로 반영하거나 원본 글꼴을 불러와 주세요.",
+        PreviewError::OutsideEditModified => "PDF를 다시 구성하면서 선택하지 않은 영역의 모양이 달라져 반영하지 않았습니다. 원본과 입력은 유지했습니다. 이 문서 구조는 편집 엔진의 추가 지원이 필요합니다.",
         PreviewError::UnchangedTextModified => {
             "이 PDF를 다시 구성하는 과정에서 수정하지 않은 다른 글자의 보존에 실패했습니다. 원본과 입력 내용은 유지했습니다. 이 문서 구조는 현재 편집 엔진에서 지원을 보완해야 합니다."
         }
@@ -166,9 +168,12 @@ pub async fn render_selected_page(
     file_id: String,
     page_index: i32,
     width: i32,
+    on_progress: Option<tauri::ipc::JavaScriptChannelId>,
+    webview: tauri::Webview,
     state: State<'_, AppState>,
     preview: State<'_, PreviewState>,
 ) -> Result<PreviewPage, String> {
+    let on_progress = on_progress.map(|id| id.channel_on::<_, u8>(webview));
     let path = {
         let selection = state.0.lock().map_err(|_| "파일 상태를 읽지 못했습니다.")?;
         let file = selection
@@ -179,10 +184,21 @@ pub async fn render_selected_page(
     };
     let engine = preview.0.clone();
     let id = file_id.clone();
-    let rendered =
-        tauri::async_runtime::spawn_blocking(move || engine.render(id, path, page_index, width))
-            .await
-            .map_err(|_| "PDF 처리 작업을 완료하지 못했습니다.")?;
+    let rendered = tauri::async_runtime::spawn_blocking(move || {
+        engine.render_with_progress(
+            id,
+            path,
+            page_index,
+            width,
+            on_progress.map(|channel| {
+                Box::new(move |percent| {
+                    let _ = channel.send(percent);
+                }) as Box<dyn Fn(u8) + Send>
+            }),
+        )
+    })
+    .await
+    .map_err(|_| "PDF 처리 작업을 완료하지 못했습니다.")?;
     let current = state
         .0
         .lock()

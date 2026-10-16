@@ -28,6 +28,8 @@ pub enum PreviewError {
     TextOverflow,
     PageOverflow,
     VerificationFailed,
+    ChangedTextMismatch,
+    OutsideEditModified,
     UnchangedTextModified,
     NoHistory,
     SaveFailed,
@@ -76,6 +78,7 @@ enum Request {
         path: PathBuf,
         page: i32,
         width: i32,
+        progress: Option<Box<dyn Fn(u8) + Send>>,
         reply: SyncSender<Result<RenderedPage, PreviewError>>,
     },
     Release(String),
@@ -254,9 +257,13 @@ impl PreviewEngine {
                             path,
                             page,
                             width,
+                            progress,
                             reply,
                         } => {
                             let result = (|| {
+                                if let Some(progress) = &progress {
+                                    progress(15);
+                                }
                                 let pdfium = pdfium
                                     .as_ref()
                                     .map_err(|_| PreviewError::LibraryUnavailable)?;
@@ -295,8 +302,15 @@ impl PreviewEngine {
                                     current = Some((id, document));
                                     history = History::default();
                                 }
-                                let mut rendered =
-                                    render_page(&current.as_ref().unwrap().1, page, width)?;
+                                let mut rendered = {
+                                    if let Some(progress) = &progress {
+                                        progress(40);
+                                    }
+                                    render_page(&current.as_ref().unwrap().1, page, width)?
+                                };
+                                if let Some(progress) = &progress {
+                                    progress(85);
+                                }
                                 rendered.state = history.state.clone();
                                 Ok(rendered)
                             })();
@@ -410,6 +424,17 @@ impl PreviewEngine {
         page: i32,
         width: i32,
     ) -> Result<RenderedPage, PreviewError> {
+        self.render_with_progress(id, path, page, width, None)
+    }
+
+    pub fn render_with_progress(
+        &self,
+        id: String,
+        path: PathBuf,
+        page: i32,
+        width: i32,
+        progress: Option<Box<dyn Fn(u8) + Send>>,
+    ) -> Result<RenderedPage, PreviewError> {
         if !(300..=1600).contains(&width) {
             return Err(PreviewError::RenderFailed);
         }
@@ -420,6 +445,7 @@ impl PreviewEngine {
                 path,
                 page,
                 width,
+                progress,
                 reply,
             })
             .map_err(|_| PreviewError::WorkerStopped)?;

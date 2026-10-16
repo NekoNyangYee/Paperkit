@@ -88,7 +88,9 @@ pub(crate) fn replace_with_fonts(
         .pages()
         .get(index)
         .map_err(|_| PreviewError::InvalidPage)?;
-    let mut before = text::extract(&doc, &page, &config);
+    // Geometry and permissions suffice here. Resolve only the fonts actually
+    // used by the new text below, never every original font on the page.
+    let mut before = text::extract_for_verification(&doc, &page, &config);
     layout::reconstruct(&page, &config, &mut before);
     if group_ids.is_empty() || group_ids.len() > 32 {
         return Err(PreviewError::UnsupportedText);
@@ -134,6 +136,9 @@ pub(crate) fn replace_with_fonts(
         return Err(PreviewError::UnsupportedText);
     }
     let ids: BTreeSet<_> = group.runs.iter().map(|r| r.object).collect();
+    if value.trim().is_empty() {
+        return delete_text(pdfium, original, index, &ids);
+    }
     if overrides.keys().any(|id| !ids.contains(id)) {
         return Err(PreviewError::StaleObject);
     }
@@ -228,7 +233,7 @@ pub(crate) fn replace_with_fonts(
     let mut tokens = Vec::new();
     let mut expected_styles = sources.clone();
     let mut originals = Vec::new();
-    for source in &sources {
+    for (style, source) in sources.iter().enumerate() {
         let object = page
             .objects()
             .get(source.id)
@@ -240,7 +245,14 @@ pub(crate) fn replace_with_fonts(
         originals.push((
             font.token(),
             font.is_embedded().unwrap_or(false),
-            font.data().ok(),
+            if replacement_font.is_none()
+                && !overrides.contains_key(&source.id)
+                && styles.contains(&style)
+            {
+                font.data().ok()
+            } else {
+                None
+            },
         ));
     }
     drop(page);
@@ -252,6 +264,7 @@ pub(crate) fn replace_with_fonts(
                 .map_err(|_| PreviewError::FontUnavailable)
         })
         .transpose()?;
+    let mut recovered_tokens = HashMap::new();
     for (i, source) in sources.iter().enumerate() {
         let needed: String = new
             .iter()
@@ -260,6 +273,11 @@ pub(crate) fn replace_with_fonts(
             .map(|(c, _)| *c)
             .collect();
         let (token, embedded, bytes) = &originals[i];
+        // Removed runs need no font, glyph mapping, or probe object.
+        if needed.is_empty() {
+            tokens.push(*token);
+            continue;
+        }
         let usable = if *embedded {
             bytes
                 .as_ref()
@@ -278,38 +296,71 @@ pub(crate) fn replace_with_fonts(
             tokens.push(token);
         } else if usable {
             tokens.push(*token);
+        } else if let Some(recovered) = recovered_tokens.get(token) {
+            tokens.push(*recovered);
         } else {
+            let needed: String = new
+                .iter()
+                .zip(&styles)
+                .filter(|(ch, style)| {
+                    **ch != '\n'
+                        && originals[**style].0 == *token
+                        && !overrides.contains_key(&sources[**style].id)
+                })
+                .map(|(ch, _)| *ch)
+                .collect();
             let bytes = crate::fonts::same_face_in_document(
                 &doc,
                 &source.font,
                 bytes.as_deref().filter(|_| *embedded),
                 &needed,
             )?;
-            tokens.push(
-                doc.fonts_mut()
-                    .load_true_type_from_bytes(&bytes, true)
-                    .map_err(|_| PreviewError::FontUnavailable)?,
-            );
+            let recovered = doc
+                .fonts_mut()
+                .load_true_type_from_bytes(&bytes, true)
+                .map_err(|_| PreviewError::FontUnavailable)?;
+            recovered_tokens.insert(*token, recovered);
+            tokens.push(recovered);
         }
+        let probe = needed
+            .chars()
+            .find(|c| !c.is_whitespace())
+            .unwrap_or(' ')
+            .to_string();
         expected_styles[i].font =
-            PdfPageTextObject::new(&doc, "|", tokens[i], PdfPoints::new(source.font_size))
+            PdfPageTextObject::new(&doc, probe, tokens[i], PdfPoints::new(source.font_size))
                 .map_err(|_| PreviewError::EditFailed)?
                 .font()
                 .name();
     }
     let mut advances = HashMap::new();
+    let mut measure_tails = HashMap::new();
     for (&ch, &s) in new.iter().zip(&styles).filter(|(c, _)| **c != '\n') {
         if advances.contains_key(&(s, ch)) {
             continue;
         }
         let size = PdfPoints::new(sources[s].font_size);
-        let tail = PdfPageTextObject::new(&doc, "|", tokens[s], size)
-            .map_err(|_| PreviewError::EditFailed)?
-            .bounds()
-            .map_err(|_| PreviewError::EditFailed)?
-            .x3()
-            .value;
-        let probe = PdfPageTextObject::new(&doc, format!("{ch}|"), tokens[s], size)
+        // Use a character already required by this run. Subset fonts may have
+        // every requested glyph but no ASCII pipe; measurement must not add one.
+        let (sentinel, tail) = if let Some(cached) = measure_tails.get(&s) {
+            *cached
+        } else {
+            let sentinel = new
+                .iter()
+                .zip(&styles)
+                .find(|(c, style)| **style == s && !c.is_whitespace())
+                .map(|(c, _)| *c)
+                .unwrap_or(ch);
+            let tail = PdfPageTextObject::new(&doc, sentinel.to_string(), tokens[s], size)
+                .map_err(|_| PreviewError::EditFailed)?
+                .bounds()
+                .map_err(|_| PreviewError::EditFailed)?
+                .x3()
+                .value;
+            measure_tails.insert(s, (sentinel, tail));
+            (sentinel, tail)
+        };
+        let probe = PdfPageTextObject::new(&doc, format!("{ch}{sentinel}"), tokens[s], size)
             .map_err(|_| PreviewError::EditFailed)?
             .bounds()
             .map_err(|_| PreviewError::EditFailed)?
@@ -491,6 +542,62 @@ pub(crate) fn replace_with_fonts(
     Ok(bytes)
 }
 
+pub(crate) fn delete_text(
+    pdfium: &Pdfium,
+    original: &[u8],
+    index: i32,
+    ids: &BTreeSet<usize>,
+) -> Result<Vec<u8>, PreviewError> {
+    if ids.is_empty() {
+        return Err(PreviewError::StaleObject);
+    }
+    let document = pdfium
+        .load_pdf_from_byte_vec(original.to_vec(), None)
+        .map_err(|_| PreviewError::EditFailed)?;
+    if !document
+        .permissions()
+        .can_modify_document_content()
+        .unwrap_or(false)
+        || !document.signatures().is_empty()
+    {
+        return Err(PreviewError::UnsupportedText);
+    }
+    let config = PdfRenderConfig::new()
+        .set_target_width(800)
+        .set_maximum_height(2200);
+    let mut page = document
+        .pages()
+        .get(index)
+        .map_err(|_| PreviewError::InvalidPage)?;
+    let before = text::extract_for_verification(&document, &page, &config);
+    for id in ids {
+        let object = before
+            .objects
+            .iter()
+            .find(|o| o.id == *id)
+            .ok_or(PreviewError::StaleObject)?;
+        if object.font_change_blocked.is_some() {
+            return Err(PreviewError::UnsupportedText);
+        }
+    }
+    page.set_content_regeneration_strategy(PdfPageContentRegenerationStrategy::Manual);
+    for id in ids.iter().rev() {
+        page.objects_mut()
+            .remove_object_at_index(*id)
+            .map_err(|_| PreviewError::EditFailed)?;
+    }
+    page.regenerate_content()
+        .map_err(|_| PreviewError::EditFailed)?;
+    drop(page);
+    let bytes = document
+        .save_to_bytes()
+        .map_err(|_| PreviewError::EditFailed)?;
+    let bytes =
+        crate::text_spacing::preserve(pdfium, original, bytes, index, &before.objects, ids, 0)?;
+    verify(pdfium, original, &bytes, index, ids, &[], &config)?;
+    Ok(bytes)
+}
+
 fn verify(
     pdfium: &Pdfium,
     original: &[u8],
@@ -520,6 +627,11 @@ fn verify(
             .map_err(|_| PreviewError::VerificationFailed)?;
         let ta = text::extract_for_verification(&old, &a, config);
         let tb = text::extract_for_verification(&new, &b, config);
+        let stored = if i == index {
+            crate::text_spacing::stored_text(bytes, i, tb.objects.len())
+        } else {
+            None
+        };
         let mut changed = BTreeSet::new();
         let mut regions = Vec::new();
         if i == index {
@@ -527,8 +639,13 @@ fn verify(
                 let candidates: Vec<_> = tb
                     .objects
                     .iter()
-                    .filter(|o| {
-                        o.text.trim_end() == value
+                    .enumerate()
+                    .filter(|(ordinal, o)| {
+                        (o.text.trim_end() == value
+                            || stored
+                                .as_ref()
+                                .and_then(|v| v.get(*ordinal))
+                                .is_some_and(|s| s.trim_end() == value))
                             && o.font == style.font
                             && o.color == style.color
                             && (o.font_size - style.font_size).abs() < 0.01
@@ -539,9 +656,10 @@ fn verify(
                             && (o.matrix[4] - x).abs() < 0.01
                             && (o.matrix[5] - y).abs() < 0.01
                     })
+                    .map(|(_, o)| o)
                     .collect();
                 if candidates.len() != 1 || !changed.insert(candidates[0].id) {
-                    return Err(PreviewError::VerificationFailed);
+                    return Err(PreviewError::ChangedTextMismatch);
                 }
                 regions.push(candidates[0].screen_bounds);
             }
@@ -579,32 +697,13 @@ fn verify(
         if a.width() != b.width() || a.height() != b.height() {
             return Err(PreviewError::VerificationFailed);
         }
-        let boxes: Vec<_> = regions
-            .iter()
-            .map(|q| {
-                (
-                    q.iter().map(|p| p[0]).min().unwrap() - 3,
-                    q.iter().map(|p| p[1]).min().unwrap() - 3,
-                    q.iter().map(|p| p[0]).max().unwrap() + 3,
-                    q.iter().map(|p| p[1]).max().unwrap() + 3,
-                )
-            })
-            .collect();
-        for (n, (a_pixel, b_pixel)) in a
-            .as_rgba_bytes()
-            .chunks_exact(4)
-            .zip(b.as_rgba_bytes().chunks_exact(4))
-            .enumerate()
-        {
-            let x = n as i32 % a.width();
-            let y = n as i32 / a.width();
-            if a_pixel != b_pixel
-                && !boxes
-                    .iter()
-                    .any(|&(x0, y0, x1, y1)| x >= x0 && x <= x1 && y >= y0 && y <= y1)
-            {
-                return Err(PreviewError::VerificationFailed);
-            }
+        if !crate::verification::unchanged_outside(
+            &a.as_rgba_bytes(),
+            &b.as_rgba_bytes(),
+            a.width() as usize,
+            &regions,
+        ) {
+            return Err(PreviewError::OutsideEditModified);
         }
     }
     Ok(())

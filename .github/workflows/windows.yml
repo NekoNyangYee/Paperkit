@@ -112,7 +112,7 @@ jobs:
           if ($LASTEXITCODE -eq 0) { throw 'Release already exists; existing assets will not be overwritten.' }
           $assets = @(Get-ChildItem -LiteralPath release-assets -File | ForEach-Object FullName)
           if ($assets.Count -ne 2) { throw 'Installer or checksum is missing.' }
-          $notesPath = "docs/releases/$($env:RELEASE_TAG).md"
+          $notesPath = ".github/releases/$($env:RELEASE_TAG).md"
           if (!(Test-Path -LiteralPath $notesPath)) { throw "Release notes missing: $notesPath" }
           gh release create $env:RELEASE_TAG @assets --verify-tag --draft --title "Paperkit $env:RELEASE_TAG" --notes-file $notesPath
           if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }

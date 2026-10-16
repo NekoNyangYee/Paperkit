@@ -24,7 +24,13 @@ vi.mock("../lib/preview", async (importOriginal) => ({
   ...(await importOriginal<typeof import("../lib/preview")>()),
   listFonts: mocks.fonts,
 }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke, isTauri: () => true }));
+vi.mock("@tauri-apps/api/core", () => ({
+  invoke: mocks.invoke,
+  isTauri: () => true,
+  Channel: class {
+    onmessage = (_percent: number) => {};
+  },
+}));
 vi.mock("@tauri-apps/plugin-dialog", () => ({
   confirm: mocks.confirm,
   save: mocks.save,
@@ -127,6 +133,36 @@ it("separates bundled and installed fonts and sends the chosen installed face ID
   );
 });
 
+it("detects weight and applies the actual bold face from the toolbar", async () => {
+  mocks.fonts.mockResolvedValue([
+    { id: "pretendard", name: "Pretendard", postscriptNames: ["Pretendard-Regular"] },
+    { id: "pretendard-bold", name: "Pretendard Bold", postscriptNames: ["Pretendard-Bold"] },
+  ]);
+  mocks.invoke.mockImplementation(async (command, args) => {
+    if (command === "render_selected_page")
+      return {
+        ...page(args.pageIndex, args.width),
+        text: {
+          objects: [{ ...object, font: "ABCDEF+Pretendard-Regular", fontWeight: 400 }],
+          warning: null,
+        },
+      };
+    if (command === "edit_document") throw "stop before mutation";
+  });
+  render(<PdfPreview file={file} />);
+  await enableEditing("object");
+  fireEvent.click(await screen.findByRole("button", { name: "텍스트 선택: Hello World" }));
+  expect(screen.getByRole("button", { name: "굵게" }).getAttribute("aria-pressed")).toBe("false");
+  fireEvent.click(screen.getByRole("button", { name: "굵게" }));
+  await waitFor(() =>
+    expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
+      fileId: file.id,
+      revision: 0,
+      action: { kind: "changeFont", page: 0, object: 0, font: "pretendard-bold" },
+    }),
+  );
+});
+
 it("selects on click, edits on double click and protects the draft from wheel rerenders", async () => {
   mocks.invoke.mockImplementation(async (command, args) => {
     if (command === "render_selected_page")
@@ -182,6 +218,7 @@ it("accumulates rapid wheel input immediately and renders only the final zoom", 
       fileId: file.id,
       pageIndex: 0,
       width: 1160,
+      onProgress: expect.any(Object),
     }),
   );
   const pageRenders = mocks.invoke.mock.calls.filter(
@@ -207,6 +244,7 @@ it.each([
       fileId: file.id,
       pageIndex: 0,
       width,
+      onProgress: expect.any(Object),
     }),
   );
   await waitFor(() => expect(select.disabled).toBe(false));
@@ -1118,7 +1156,7 @@ it("retains the draft when the original font lacks new glyphs, then imports the 
     if (command === "render_selected_page")
       return { ...page(args.pageIndex, args.width), text: { objects: [object], warning: null } };
     if (command === "document_font") {
-      if (!imported) throw "Missing original glyph";
+      if (!imported) throw "원본 글꼴에 입력한 문자가 없습니다. 입력 내용은 유지했습니다.";
       return "AA==";
     }
     if (command === "import_original_font") {
@@ -1135,7 +1173,7 @@ it("retains the draft when the original font lacks new glyphs, then imports the 
   const value = "Hello \uD55C\uAE00";
   fireEvent.input(input, { target: { textContent: value } });
   fireEvent.keyDown(input, { key: "Enter" });
-  await screen.findByText("Missing original glyph");
+  await screen.findByRole("dialog", { name: "반영할 글꼴을 선택해 주세요" });
   expect(input.textContent).toBe(value);
   expect(
     mocks.invoke.mock.calls.some(([cmd]) => cmd === "editor_font" || cmd === "edit_document"),
@@ -1166,6 +1204,79 @@ it("retains the draft when the original font lacks new glyphs, then imports the 
       action: { kind: "replace", page: 0, object: 0, text: value },
     }),
   );
+});
+
+it("commits empty text as deletion without requesting a font for the empty draft", async () => {
+  mocks.invoke.mockImplementation(async (command, args) => {
+    if (command === "render_selected_page")
+      return { ...page(args.pageIndex, args.width), text: { objects: [object], warning: null } };
+    if (command === "editing_background") return "data:image/png;base64,AA==";
+    if (command === "document_font") throw "원본 글꼴 데이터를 사용할 수 없습니다.";
+    if (command === "edit_document")
+      return { revision: 1, dirty: true, canUndo: true, canRedo: false };
+  });
+  render(<PdfPreview file={file} />);
+  await enableEditing("object");
+  fireEvent.doubleClick(await screen.findByRole("button", { name: /Hello World/ }));
+  const input = await screen.findByRole("textbox", { name: "내용" });
+  mocks.invoke.mockClear();
+  fireEvent.input(input, { target: { textContent: "" } });
+  fireEvent.keyDown(input, { key: "Enter" });
+  await waitFor(() =>
+    expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
+      fileId: file.id,
+      revision: 0,
+      action: { kind: "replace", page: 0, object: 0, text: "" },
+    }),
+  );
+  expect(mocks.invoke.mock.calls.some(([command]) => command === "document_font")).toBe(false);
+});
+
+it("warns before applying missing glyphs and only substitutes after explicit choice", async () => {
+  mocks.invoke.mockImplementation(async (command, args) => {
+    if (command === "render_selected_page")
+      return { ...page(args.pageIndex, args.width), text: { objects: [object], warning: null } };
+    if (command === "editing_background") return "data:image/png;base64,AA==";
+    if (command === "document_font") throw "원본 글꼴에 입력한 문자가 없습니다.";
+    if (command === "edit_document") throw "저장 검증 실패 테스트";
+  });
+  render(<PdfPreview file={file} />);
+  await enableEditing("object");
+  fireEvent.doubleClick(await screen.findByRole("button", { name: /Hello World/ }));
+  const input = await screen.findByRole("textbox", { name: "내용" });
+  fireEvent.input(input, { target: { textContent: "Hello 한글" } });
+  await screen.findByText(
+    "원본 글꼴로 반영할 수 없는 문자가 있습니다. 입력은 유지됩니다.",
+    {},
+    { timeout: 3000 },
+  );
+  expect(mocks.invoke.mock.calls.some(([cmd]) => cmd === "edit_document")).toBe(false);
+  fireEvent.click(screen.getByRole("button", { name: "반영 방법 선택" }));
+  fireEvent.click(screen.getByRole("button", { name: "계속 편집" }));
+  expect(input.textContent).toBe("Hello 한글");
+  fireEvent.keyDown(input, { key: "Enter" });
+  await screen.findByRole("dialog", { name: "반영할 글꼴을 선택해 주세요" });
+  fireEvent.change(screen.getByRole("combobox", { name: "대체 글꼴" }), {
+    target: { value: "nanum-gothic" },
+  });
+  fireEvent.click(screen.getByRole("button", { name: "대체 글꼴로 반영" }));
+  await waitFor(() =>
+    expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
+      fileId: file.id,
+      revision: 0,
+      action: {
+        kind: "flexibleEdit",
+        page: 0,
+        groups: [],
+        object: 0,
+        text: "Hello 한글",
+        fonts: { 0: "nanum-gothic" },
+      },
+    }),
+  );
+  await screen.findByText("저장 검증 실패 테스트");
+  expect(input.textContent).toBe("Hello 한글");
+  expect(mocks.save).not.toHaveBeenCalled();
 });
 
 it("preserves dirty state on save cancellation/failure and clears it after verified save", async () => {
@@ -1395,7 +1506,30 @@ it("renders the selected file, navigates and rerenders at a new zoom", async () 
     fileId: file.id,
     pageIndex: 1,
     width: 1160,
+    onProgress: expect.any(Object),
   });
+});
+
+it("reports native page progress and waits for a finished page before hiding it", async () => {
+  let finish!: (value: unknown) => void;
+  mocks.invoke.mockImplementation((command, args) => {
+    if (command === "render_selected_page") {
+      args.onProgress?.onmessage(40);
+      return new Promise((resolve) => {
+        finish = resolve;
+      });
+    }
+  });
+  render(<PdfPreview file={file} />);
+  await waitFor(() =>
+    expect(
+      screen.getByRole("progressbar", { name: "페이지 로딩 진행률" }).getAttribute("value"),
+    ).toBe("40"),
+  );
+  expect(screen.queryByRole("img", { name: "example.pdf · 1페이지" })).toBeNull();
+  await act(async () => finish(page()));
+  await screen.findByRole("img", { name: "example.pdf · 1페이지" });
+  expect(screen.queryByRole("progressbar", { name: "페이지 로딩 진행률" })).toBeNull();
 });
 
 it("shows engine errors and retries without discarding the selection", async () => {

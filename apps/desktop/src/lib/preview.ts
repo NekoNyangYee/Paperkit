@@ -1,5 +1,5 @@
 import { detectAlignment, type Alignment } from "./alignment";
-import { invoke } from "@tauri-apps/api/core";
+import { Channel, invoke } from "@tauri-apps/api/core";
 
 export interface EditState {
   revision: number;
@@ -13,6 +13,7 @@ export interface TextObject {
   text: string;
   font: string;
   fontSize: number;
+  fontWeight?: number | null;
   color: number[];
   matrix: number[];
   bounds: number[][];
@@ -137,6 +138,7 @@ export type EditAction =
 export interface FontInfo {
   id: string;
   name: string;
+  postscriptNames?: string[];
   source?: "bundled" | "installed";
 }
 export async function listFonts(): Promise<FontInfo[]> {
@@ -244,8 +246,19 @@ export async function renderPage(
   fileId: string,
   pageIndex: number,
   width: number,
+  onProgress?: (percent: number) => void,
 ): Promise<PreviewPage> {
-  const value = await invoke<unknown>("render_selected_page", { fileId, pageIndex, width });
+  const progress = onProgress ? new Channel<number>() : undefined;
+  if (progress)
+    progress.onmessage = (percent) => {
+      if (Number.isFinite(percent) && percent >= 0 && percent <= 85) onProgress?.(percent);
+    };
+  const value = await invoke<unknown>("render_selected_page", {
+    fileId,
+    pageIndex,
+    width,
+    ...(progress ? { onProgress: progress } : {}),
+  });
   if (typeof value !== "object" || value === null)
     throw new Error("페이지 응답이 올바르지 않습니다.");
   const page = value as Record<string, unknown>;
