@@ -44,3 +44,5 @@ PDF는 문서마다 내부 구조가 달라 편집 가능한 범위에 차이가
 - [오류 제보 및 기능 제안](https://github.com/NekoNyangYee/Paperkit/issues)
 
 Tauri, React, TypeScript, Rust, PDFium으로 만들었습니다.
+
+PDF 처리는 **[Paperframe](crates/pdf-core/README.md)** 엔진이 담당합니다. 문서의 원래 틀을 보존하며 편집한다는 의미로, PDFium을 기반으로 동작합니다.

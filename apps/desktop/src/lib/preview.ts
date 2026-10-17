@@ -2,6 +2,7 @@ import { detectAlignment, type Alignment } from "./alignment";
 import { Channel, invoke } from "@tauri-apps/api/core";
 
 export interface EditState {
+  pageCount?: number;
   revision: number;
   dirty: boolean;
   canUndo: boolean;
@@ -79,6 +80,12 @@ export function groupSelection(group: TextGroup, objects: TextObject[]): TextSel
   };
 }
 export type EditAction =
+  | {
+      kind: "page";
+      operation: "move" | "duplicate" | "rotate" | "delete";
+      page: number;
+      destination?: number;
+    }
   | { kind: "transformGraphic"; page: number; object: number; matrix: number[] }
   | { kind: "deleteGraphic"; page: number; object: number }
   | {
@@ -155,6 +162,7 @@ function isState(value: unknown): value is EditState {
   if (!value || typeof value !== "object") return false;
   const s = value as Record<string, unknown>;
   return (
+    (s.pageCount === undefined || (Number.isSafeInteger(s.pageCount) && Number(s.pageCount) > 0)) &&
     Number.isSafeInteger(s.revision) &&
     Number(s.revision) >= 0 &&
     [s.dirty, s.canUndo, s.canRedo].every((v) => typeof v === "boolean")

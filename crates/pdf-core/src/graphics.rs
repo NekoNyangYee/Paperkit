@@ -1,4 +1,4 @@
-use crate::{render::PreviewError, text};
+use crate::{error::EngineError as PreviewError, text};
 use pdfium_render::prelude::*;
 
 /// Work on a private document; publish only after reopening and checking pixels.

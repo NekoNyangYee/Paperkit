@@ -30,6 +30,227 @@ fn pdf(stream: &str, rotation: i32) -> Vec<u8> {
 
 #[test]
 #[ignore = "requires bundled Windows PDFium"]
+fn page_operations_preserve_content_history_and_saved_order() {
+    use lopdf::{Dictionary, Object, Stream};
+    use pdf_core::pages::PageOperation;
+    let resources =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/resources");
+    let engine = PreviewEngine::start(resources.join("pdfium/pdfium.dll")).unwrap();
+    let path = std::env::temp_dir().join(format!("paperkit-pages-{}.pdf", std::process::id()));
+    let saved = path.with_extension("saved.pdf");
+    let mut doc =
+        lopdf::Document::load_mem(&pdf("BT /F1 20 Tf 40 700 Td (PAGE A) Tj ET\n", 0)).unwrap();
+    let template = doc.get_object((3, 0)).unwrap().as_dict().unwrap().clone();
+    let mut kids = vec![Object::Reference((3, 0))];
+    for label in ["B", "C"] {
+        let stream = doc.add_object(Stream::new(
+            Dictionary::new(),
+            format!("BT /F1 20 Tf 40 700 Td (PAGE {label}) Tj ET\n").into_bytes(),
+        ));
+        let mut page = template.clone();
+        page.set("Contents", stream);
+        let id = doc.add_object(page);
+        kids.push(id.into());
+    }
+    // The reorder path must retain inherited resources and page dimensions.
+    for id in kids.iter().map(|o| o.as_reference().unwrap()) {
+        let page = doc.get_object_mut(id).unwrap().as_dict_mut().unwrap();
+        page.remove(b"Resources");
+        page.remove(b"MediaBox");
+    }
+    let tree = doc.get_object_mut((2, 0)).unwrap().as_dict_mut().unwrap();
+    tree.set("Kids", kids);
+    tree.set("Count", 3);
+    tree.set("Resources", template.get(b"Resources").unwrap().clone());
+    tree.set("MediaBox", template.get(b"MediaBox").unwrap().clone());
+    doc.save(&path).unwrap();
+    let original = fs::read(&path).unwrap();
+    let initial: Vec<_> = (0..3)
+        .map(|i| {
+            engine
+                .render("pages".into(), path.clone(), i, 800)
+                .unwrap()
+                .png
+        })
+        .collect();
+    let apply = |revision, page, operation, destination| {
+        engine
+            .edit(
+                "pages".into(),
+                revision,
+                EditAction::Page {
+                    page,
+                    operation,
+                    destination,
+                },
+            )
+            .unwrap()
+    };
+    assert_eq!(
+        apply(0, 0, PageOperation::Move, Some(2)).page_count,
+        Some(3)
+    );
+    for (i, old) in [1, 2, 0].into_iter().enumerate() {
+        assert_eq!(
+            engine
+                .render("pages".into(), path.clone(), i as i32, 800)
+                .unwrap()
+                .png,
+            initial[old]
+        );
+    }
+    assert_eq!(
+        apply(1, 1, PageOperation::Duplicate, None).page_count,
+        Some(4)
+    );
+    assert_eq!(
+        engine
+            .render("pages".into(), path.clone(), 2, 800)
+            .unwrap()
+            .png,
+        initial[2]
+    );
+    apply(2, 2, PageOperation::Rotate, None);
+    let rotated = engine.render("pages".into(), path.clone(), 2, 800).unwrap();
+    assert!(rotated.width > rotated.height);
+    assert_eq!(apply(3, 3, PageOperation::Delete, None).page_count, Some(3));
+    let undo = engine.edit("pages".into(), 4, EditAction::Undo).unwrap();
+    assert_eq!(undo.page_count, Some(4));
+    assert_eq!(
+        engine
+            .render("pages".into(), path.clone(), 3, 800)
+            .unwrap()
+            .png,
+        initial[0]
+    );
+    engine.edit("pages".into(), 5, EditAction::Redo).unwrap();
+    engine
+        .edit(
+            "pages".into(),
+            6,
+            EditAction::Save {
+                path: saved.clone(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        engine
+            .render("saved-pages".into(), saved.clone(), 2, 800)
+            .unwrap()
+            .png,
+        rotated.png
+    );
+    for revision in 0..2 {
+        engine
+            .edit(
+                "saved-pages".into(),
+                revision,
+                EditAction::Page {
+                    page: 0,
+                    operation: PageOperation::Delete,
+                    destination: None,
+                },
+            )
+            .unwrap();
+    }
+    let before_rejection = engine
+        .render("saved-pages".into(), saved.clone(), 0, 800)
+        .unwrap();
+    assert!(matches!(
+        engine.edit(
+            "saved-pages".into(),
+            2,
+            EditAction::Page {
+                page: 0,
+                operation: PageOperation::Delete,
+                destination: None
+            }
+        ),
+        Err(PreviewError::LastPage)
+    ));
+    let after_rejection = engine
+        .render("saved-pages".into(), saved.clone(), 0, 800)
+        .unwrap();
+    assert_eq!(after_rejection.png, before_rejection.png);
+    assert_eq!(
+        after_rejection.state.revision,
+        before_rejection.state.revision
+    );
+    assert_eq!(
+        after_rejection.state.can_undo,
+        before_rejection.state.can_undo
+    );
+    assert_eq!(
+        after_rejection.state.can_redo,
+        before_rejection.state.can_redo
+    );
+    // A rejected candidate must not consume or alter the last successful undo step.
+    assert_eq!(
+        engine
+            .edit("saved-pages".into(), 2, EditAction::Undo)
+            .unwrap()
+            .page_count,
+        Some(2)
+    );
+    assert_eq!(fs::read(&path).unwrap(), original);
+    fs::remove_file(path).unwrap();
+    fs::remove_file(saved).unwrap();
+}
+
+#[test]
+#[ignore = "requires bundled Windows PDFium"]
+fn edits_double_spaced_block_without_compressing_its_lines() {
+    let resources =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/resources");
+    let engine = PreviewEngine::start(resources.join("pdfium/pdfium.dll")).unwrap();
+    let path = std::env::temp_dir().join(format!("paperkit-leading-{}.pdf", std::process::id()));
+    fs::write(&path, pdf("BT /F1 12 Tf 40 700 Td (First line of a long block) Tj 0 -24 Td (Second line of this block) Tj 0 -24 Td (Third line ends here.) Tj ET\n", 0)).unwrap();
+    let before = engine
+        .render("leading".into(), path.clone(), 0, 800)
+        .unwrap();
+    let group = before
+        .text
+        .groups
+        .iter()
+        .find(|g| g.kind == GroupKind::Paragraph)
+        .unwrap();
+    assert_eq!(group.bounds.len(), 3);
+    engine
+        .edit(
+            "leading".into(),
+            0,
+            EditAction::FlowBlock {
+                page: 0,
+                group: group.id,
+                text: group.text.replace("First", "Start"),
+                width: None,
+                height: None,
+            },
+        )
+        .unwrap();
+    let after = engine
+        .render("leading".into(), path.clone(), 0, 800)
+        .unwrap();
+    let mut baselines: Vec<_> = after.text.objects.iter().map(|o| o.matrix[5]).collect();
+    baselines.sort_by(|a, b| b.total_cmp(a));
+    baselines.dedup_by(|a, b| (*a - *b).abs() < 0.1);
+    assert!(baselines.len() >= 3);
+    for pair in baselines.windows(2) {
+        assert!((pair[0] - pair[1] - 24.0).abs() < 0.01);
+    }
+    engine.edit("leading".into(), 1, EditAction::Undo).unwrap();
+    assert_eq!(
+        engine
+            .render("leading".into(), path.clone(), 0, 800)
+            .unwrap()
+            .png,
+        before.png
+    );
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+#[ignore = "requires bundled Windows PDFium"]
 fn consecutive_spaces_survive_block_edit_save_and_reopen() {
     let resources =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/resources");
@@ -1511,4 +1732,164 @@ fn columns_cells_paragraphs_move_edit_save_and_reopen() {
             blocks.len()
         );
     }
+}
+
+#[test]
+#[ignore = "requires bundled Windows PDFium"]
+fn reflow_does_not_overwrite_a_neighbouring_paragraph() {
+    let resources =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/resources");
+    let engine = PreviewEngine::start(resources.join("pdfium/pdfium.dll")).unwrap();
+    let path = std::env::temp_dir().join(format!("paperkit-collision-{}.pdf", std::process::id()));
+    let original = pdf("BT /F1 12 Tf 40 700 Td (Original) Tj ET\nBT /F1 12 Tf 40 650 Td (KEEP THIS PARAGRAPH) Tj ET\n",0);
+    fs::write(&path, &original).unwrap();
+    let before = engine
+        .render("collision".into(), path.clone(), 0, 800)
+        .unwrap();
+    let group = before
+        .text
+        .groups
+        .iter()
+        .find(|g| g.kind == GroupKind::Paragraph && g.text == "Original")
+        .unwrap();
+    assert_eq!(
+        engine
+            .edit(
+                "collision".into(),
+                0,
+                EditAction::FlowBlock {
+                    page: 0,
+                    group: group.id,
+                    text: "First\nSecond\nThird\nFourth".into(),
+                    width: None,
+                    height: None,
+                }
+            )
+            .unwrap_err(),
+        PreviewError::TextOverflow
+    );
+    assert_eq!(
+        engine
+            .render("collision".into(), path.clone(), 0, 800)
+            .unwrap()
+            .png,
+        before.png
+    );
+    assert_eq!(fs::read(&path).unwrap(), original);
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+#[ignore = "requires bundled Windows PDFium"]
+fn short_edit_preserves_tj_spacing_fonts_and_shared_content() {
+    use lopdf::{content::Content, Document, Object};
+    let resources =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/resources");
+    let engine = PreviewEngine::start(resources.join("pdfium/pdfium.dll")).unwrap();
+    let stream = "BT /F1 12 Tf 0.3 Tc 1.5 Tw 40 700 Td [(2026-) -12 (10-17)] TJ ET\nBT /F1 12 Tf 40 600 Td (KEEP) Tj ET\n";
+    let mut source = Document::load_mem(&pdf(stream, 0)).unwrap();
+    let page = source.get_object((3, 0)).unwrap().clone();
+    let second = source.add_object(page);
+    let root = source
+        .get_object_mut((2, 0))
+        .unwrap()
+        .as_dict_mut()
+        .unwrap();
+    root.set(
+        "Kids",
+        vec![Object::Reference((3, 0)), Object::Reference(second)],
+    );
+    root.set("Count", 2);
+    let mut original = Vec::new();
+    source.save_to(&mut original).unwrap();
+    let path = std::env::temp_dir().join(format!("paperkit-patch-{}.pdf", std::process::id()));
+    let saved = path.with_extension("saved.pdf");
+    fs::write(&path, &original).unwrap();
+    let before = engine.render("patch".into(), path.clone(), 0, 800).unwrap();
+    let other = engine.render("patch".into(), path.clone(), 1, 800).unwrap();
+    let group = before
+        .text
+        .groups
+        .iter()
+        .find(|g| g.kind == GroupKind::Paragraph && g.text.contains("2026"))
+        .unwrap();
+    let state = engine
+        .edit(
+            "patch".into(),
+            0,
+            EditAction::FlowBlock {
+                page: 0,
+                group: group.id,
+                text: group.text.replace("17", "18"),
+                width: None,
+                height: None,
+            },
+        )
+        .unwrap();
+    let edited = engine.render("patch".into(), path.clone(), 0, 800).unwrap();
+    assert_eq!(
+        engine
+            .render("patch".into(), path.clone(), 1, 800)
+            .unwrap()
+            .png,
+        other.png
+    );
+    engine
+        .edit(
+            "patch".into(),
+            state.revision,
+            EditAction::Save {
+                path: saved.clone(),
+            },
+        )
+        .unwrap();
+    let output = Document::load(&saved).unwrap();
+    // This asserts the direct path was used, not a visually similar rebuild.
+    assert_eq!(
+        output
+            .get_object((4, 0))
+            .unwrap()
+            .as_stream()
+            .unwrap()
+            .get_plain_content()
+            .unwrap(),
+        source
+            .get_object((4, 0))
+            .unwrap()
+            .as_stream()
+            .unwrap()
+            .get_plain_content()
+            .unwrap()
+    );
+    assert_eq!(
+        output.get_object((5, 0)).unwrap(),
+        source.get_object((5, 0)).unwrap()
+    );
+    assert_eq!(
+        output.get_object(second).unwrap(),
+        source.get_object(second).unwrap()
+    );
+    let commands = Content::decode(&output.get_page_content((3, 0))).unwrap();
+    let expected = Content::decode(stream.replace("10-17", "10-18").as_bytes()).unwrap();
+    assert_eq!(commands.encode().unwrap(), expected.encode().unwrap());
+    engine
+        .edit("patch".into(), state.revision, EditAction::Undo)
+        .unwrap();
+    assert_eq!(
+        engine
+            .render("patch".into(), path.clone(), 0, 800)
+            .unwrap()
+            .png,
+        before.png
+    );
+    assert_eq!(
+        engine
+            .render("patch-reopen".into(), saved.clone(), 0, 800)
+            .unwrap()
+            .png,
+        edited.png
+    );
+    assert_eq!(fs::read(&path).unwrap(), original);
+    fs::remove_file(path).unwrap();
+    fs::remove_file(saved).unwrap();
 }

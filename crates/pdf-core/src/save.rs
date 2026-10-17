@@ -1,4 +1,4 @@
-use crate::render::PreviewError;
+use crate::error::EngineError as PreviewError;
 use pdfium_render::prelude::*;
 use std::{
     fs::{self, OpenOptions},

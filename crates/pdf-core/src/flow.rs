@@ -1,7 +1,7 @@
 //! Editable blocks with retained source styles and independently adjustable width.
 use crate::{
+    error::EngineError as PreviewError,
     layout::{self, GroupKind, TextGroup},
-    render::PreviewError,
     text::{self, TextObject},
 };
 use pdfium_render::prelude::*;
@@ -37,6 +37,38 @@ fn rect(points: &[[f32; 2]]) -> [f32; 4] {
             .map(|p| p[1])
             .fold(f32::NEG_INFINITY, f32::max),
     ]
+}
+
+fn original_encoding_roundtrips(
+    document: &mut PdfDocument<'_>,
+    token: PdfFontToken,
+    text: &str,
+) -> Result<bool, PreviewError> {
+    let chars: BTreeSet<char> = text.chars().collect();
+    let anchor = chars
+        .iter()
+        .copied()
+        .find(|c| !c.is_whitespace())
+        .unwrap_or(' ');
+    let probe = format!("{anchor}{}{anchor}", chars.into_iter().collect::<String>());
+    let object = PdfPageTextObject::new(document, &probe, token, PdfPoints::new(10.0))
+        .map_err(|_| PreviewError::FontUnavailable)?;
+    let mut page = document
+        .pages_mut()
+        .create_page_at_end(PdfPagePaperSize::a4())
+        .map_err(|_| PreviewError::EditFailed)?;
+    let object = page
+        .objects_mut()
+        .add_text_object(object)
+        .map_err(|_| PreviewError::EditFailed)?;
+    let matches = object.as_text_object().is_some_and(|o| o.text() == probe);
+    drop(object);
+    page.delete().map_err(|_| PreviewError::EditFailed)?;
+    Ok(matches)
+}
+
+fn overlap_area(a: [f32; 4], b: [f32; 4]) -> f32 {
+    (a[2].min(b[2]) - a[0].max(b[0])).max(0.0) * (a[3].min(b[3]) - a[1].max(b[1])).max(0.0)
 }
 
 pub(crate) fn replace(
@@ -141,6 +173,25 @@ pub(crate) fn replace_with_fonts(
     }
     if overrides.keys().any(|id| !ids.contains(id)) {
         return Err(PreviewError::StaleObject);
+    }
+    if selected.len() == 1
+        && width.is_none()
+        && height.is_none()
+        && replacement_font.is_none()
+        && overrides.is_empty()
+        && alignment.is_none()
+    {
+        if let Some(bytes) = patch_short_edit(
+            pdfium,
+            original,
+            index,
+            group,
+            value,
+            &before.objects,
+            &config,
+        ) {
+            return Ok(bytes);
+        }
     }
     let sources: Vec<_> = group
         .runs
@@ -278,10 +329,20 @@ pub(crate) fn replace_with_fonts(
             tokens.push(*token);
             continue;
         }
+        let face_needed: String = new
+            .iter()
+            .zip(&styles)
+            .filter(|(ch, style)| {
+                **ch != '\n'
+                    && originals[**style].0 == *token
+                    && !overrides.contains_key(&sources[**style].id)
+            })
+            .map(|(ch, _)| *ch)
+            .collect();
         let usable = if *embedded {
             bytes
                 .as_ref()
-                .is_some_and(|b| crate::fonts::validate_original(b, &needed).is_ok())
+                .is_some_and(|b| crate::fonts::validate_original(b, &face_needed).is_ok())
         } else {
             crate::text::standard_font(&source.font) && needed.is_ascii()
         };
@@ -294,10 +355,26 @@ pub(crate) fn replace_with_fonts(
             );
         } else if let Some(token) = replacement {
             tokens.push(token);
-        } else if usable {
-            tokens.push(*token);
         } else if let Some(recovered) = recovered_tokens.get(token) {
             tokens.push(*recovered);
+        } else if usable
+            && *embedded
+            && original_encoding_roundtrips(&mut doc, *token, &face_needed)?
+        {
+            recovered_tokens.insert(*token, *token);
+            tokens.push(*token);
+        } else if usable && *embedded {
+            // A Unicode cmap in the font file does not mean the PDF's original
+            // encoding can encode new text (even spaces). Load a fresh Unicode
+            // font resource while retaining the exact embedded outlines.
+            let loaded = doc
+                .fonts_mut()
+                .load_true_type_from_bytes(bytes.as_ref().unwrap(), true)
+                .map_err(|_| PreviewError::FontUnavailable)?;
+            recovered_tokens.insert(*token, loaded);
+            tokens.push(loaded);
+        } else if usable {
+            tokens.push(*token);
         } else {
             let needed: String = new
                 .iter()
@@ -413,11 +490,18 @@ pub(crate) fn replace_with_fonts(
     baselines.sort_by(|a, b| b.total_cmp(a));
     baselines.dedup_by(|a, b| (*a - *b).abs() < 0.1);
     let default_em = sources[0].font_size * sources[0].matrix[3];
-    let leading = baselines
+    let mut observed_leading: Vec<_> = baselines
         .windows(2)
         .map(|p| p[0] - p[1])
-        .filter(|v| *v > default_em * 0.5)
-        .fold(default_em * 1.4, f32::min);
+        .filter(|v| *v > default_em * 0.5 && *v <= default_em * 3.0)
+        .collect();
+    observed_leading.sort_by(f32::total_cmp);
+    // A 1.4em default is only for a single original line. Capping existing
+    // leading at that default compressed every double-spaced edited paragraph.
+    let leading = observed_leading
+        .get(observed_leading.len() / 2)
+        .copied()
+        .unwrap_or(default_em * 1.4);
     let mut y = baselines[0];
     let mut expected = Vec::new();
     let mut replacements = Vec::new();
@@ -486,6 +570,31 @@ pub(crate) fn replace_with_fonts(
                 let q = object.bounds().map_err(|_| PreviewError::EditFailed)?;
                 if q.bottom().value < bottom || q.top().value > top || q.right().value > right {
                     return Err(PreviewError::PageOverflow);
+                }
+                // Reflow must not paint over a neighbouring paragraph. Existing
+                // intentional overlaps remain allowed; only new collisions fail.
+                let candidate = [
+                    q.left().value,
+                    q.bottom().value,
+                    q.right().value,
+                    q.top().value,
+                ];
+                for neighbour in before
+                    .objects
+                    .iter()
+                    .filter(|o| !ids.contains(&o.id) && !o.text.trim().is_empty())
+                {
+                    let target = rect(&neighbour.bounds);
+                    let overlap = overlap_area(candidate, target);
+                    let old_overlap = sources
+                        .iter()
+                        .map(|o| overlap_area(rect(&o.bounds), target))
+                        .fold(0.0, f32::max);
+                    if overlap > old_overlap + 0.5
+                        && overlap > 0.15 * (target[2] - target[0]) * (target[3] - target[1])
+                    {
+                        return Err(PreviewError::TextOverflow);
+                    }
                 }
                 expected.push((text.trim_end().to_owned(), style.clone(), x, y));
                 replacements.push(object);
@@ -596,6 +705,60 @@ pub(crate) fn delete_text(
         crate::text_spacing::preserve(pdfium, original, bytes, index, &before.objects, ids, 0)?;
     verify(pdfium, original, &bytes, index, ids, &[], &config)?;
     Ok(bytes)
+}
+
+fn patch_short_edit(
+    pdfium: &Pdfium,
+    original: &[u8],
+    index: i32,
+    group: &TextGroup,
+    value: &str,
+    objects: &[TextObject],
+    config: &PdfRenderConfig,
+) -> Option<Vec<u8>> {
+    let old: Vec<char> = group.text.chars().collect();
+    let new: Vec<char> = value.chars().collect();
+    if old.len() != new.len() || old == new {
+        return None;
+    }
+    let start = old.iter().zip(&new).position(|(a, b)| a != b)?;
+    let end = old.iter().zip(&new).rposition(|(a, b)| a != b)? + 1;
+    if end - start > 32 {
+        return None;
+    }
+    let run = group
+        .runs
+        .iter()
+        .find(|r| r.start <= start && r.end >= end && r.object_start == 0)?;
+    let source = objects.iter().find(|o| o.id == run.object)?;
+    if run.end - run.start != source.text.chars().count() {
+        return None;
+    }
+    let text: String = new[run.start..run.end].iter().collect();
+    let bytes = crate::text_patch::patch(original, index, objects, source.id, &text)?;
+    let doc = pdfium.load_pdf_from_byte_vec(bytes.clone(), None).ok()?;
+    let page = doc.pages().get(index).ok()?;
+    let after = text::extract_for_verification(&doc, &page, config);
+    let target = after.objects.iter().find(|o| o.id == source.id)?;
+    let a = rect(&source.bounds);
+    let b = rect(&target.bounds);
+    // This path is for edits that fit the old ink area. Wider edits use reflow.
+    if b[0] < a[0] - 0.5 || b[1] < a[1] - 0.5 || b[2] > a[2] + 0.5 || b[3] > a[3] + 0.5 {
+        return None;
+    }
+    drop(page);
+    drop(doc);
+    verify(
+        pdfium,
+        original,
+        &bytes,
+        index,
+        &BTreeSet::from([source.id]),
+        &[(text, source.clone(), source.matrix[4], source.matrix[5])],
+        config,
+    )
+    .ok()?;
+    Some(bytes)
 }
 
 fn verify(

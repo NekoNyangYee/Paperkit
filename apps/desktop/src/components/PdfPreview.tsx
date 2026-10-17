@@ -21,7 +21,6 @@ import {
   ChevronLeft,
   ChevronRight,
   FolderOpen,
-  MousePointer2,
   Type,
   FileText,
 } from "lucide-react";
@@ -38,10 +37,10 @@ import {
   groupSelection,
 } from "../lib/preview";
 import type { FontInfo } from "../lib/preview";
-import type { TextSelection, SelectionMode } from "../lib/preview";
+import type { TextSelection } from "../lib/preview";
 import type { PreviewPage, TextObject, EditState, EditAction } from "../lib/preview";
 import { useAppStore } from "../stores/app-store";
-import { PageSidebar } from "./PageSidebar";
+import { PageSidebar, type ThumbnailChange } from "./PageSidebar";
 import { ZoomSurface } from "./ZoomSurface";
 import { TextPage } from "./TextPage";
 import { editorFont, clearOriginalFonts } from "../lib/editor-font";
@@ -72,7 +71,8 @@ export function PdfPreview({ file }: { file: FileInfo }) {
   const renderedLocation = useRef("");
   const [sidebarOpen, setSidebarOpen] = useState(true);
   const [editingEnabled, setEditingEnabled] = useState(false);
-  const [selectionMode, setSelectionMode] = useState<SelectionMode>("paragraph");
+  const selectionMode = "paragraph" as const;
+  const [thumbnailChange, setThumbnailChange] = useState<ThumbnailChange | null>(null);
   const composing = useRef(false);
   const [fonts, setFonts] = useState<FontInfo[]>([]);
   const [fontError, setFontError] = useState<string | null>(null);
@@ -439,15 +439,6 @@ export function PdfPreview({ file }: { file: FileInfo }) {
     setEditError(null);
   }
 
-  async function changeSelectionMode(mode: SelectionMode) {
-    if (working.current || (unsavedDraft && !(await approveDiscard()))) return;
-    fontPreparation.current++;
-    setSelected(null);
-    setDraft("");
-    setEditError(null);
-    setSelectionMode(mode);
-  }
-
   async function beginEditing(object: TextSelection) {
     if (!editingEnabled || working.current || loading || composing.current) return;
     if (inlineEditing && selected?.id === object.id) return;
@@ -605,7 +596,42 @@ export function PdfPreview({ file }: { file: FileInfo }) {
     setNotice(null);
     try {
       const result = await editDocument(file.id, revision, action);
+      setThumbnailChange(
+        action.kind === "undo" || action.kind === "redo"
+          ? null
+          : {
+              fromRevision: revision,
+              revision: result.revision,
+              operation:
+                action.kind === "page"
+                  ? action.operation
+                  : action.kind === "save"
+                    ? "save"
+                    : "content",
+              page: "page" in action ? action.page : pageIndex,
+              destination: action.kind === "page" ? action.destination : undefined,
+            },
+      );
       setEditState(result);
+      if (result.pageCount !== undefined) {
+        setPageCount(result.pageCount);
+        const next =
+          action.kind === "page"
+            ? action.operation === "move"
+              ? action.destination!
+              : action.operation === "duplicate"
+                ? action.page + 1
+                : Math.min(action.page, result.pageCount - 1)
+            : Math.min(pageIndex, result.pageCount - 1);
+        setPageIndex(next);
+        setPageInput(String(next + 1));
+      }
+      if (["page", "undo", "redo"].includes(action.kind)) {
+        setSelected(null);
+        setDraft("");
+        setInlineEditing(false);
+        setBlockSize(null);
+      }
       if (action.kind === "save") setNotice("새 PDF로 저장하고 다시 열어 검증했습니다.");
       else {
         if (action.kind === "move" && selected) {
@@ -853,7 +879,7 @@ export function PdfPreview({ file }: { file: FileInfo }) {
   );
 
   const pageWarning =
-    editingEnabled && page && selectionMode !== "graphic"
+    editingEnabled && page
       ? (page.text.warning ??
         (page.text.objects.length === 0
           ? "선택 가능한 텍스트 객체가 없습니다. 이미지나 윤곽선으로 저장된 글자일 수 있습니다."
@@ -926,6 +952,12 @@ export function PdfPreview({ file }: { file: FileInfo }) {
       {pageCount !== null && (
         <PageSidebar
           key={file.id}
+          thumbnailChange={thumbnailChange}
+          editable={editingEnabled}
+          onPageAction={(operation, index, destination) => {
+            if (unsavedDraft || working.current || loading) return;
+            void run({ kind: "page", operation, page: index, destination });
+          }}
           revision={editState.revision}
           paused={busy || loading || preparingEdit || inlineEditing}
           fileId={file.id}
@@ -1034,27 +1066,6 @@ export function PdfPreview({ file }: { file: FileInfo }) {
             </div>
             <div className="ribbon-group">
               <label className="flex flex-1 items-center gap-2 text-stone-600">
-                <MousePointer2 size={18} aria-hidden="true" />
-                <span className="sr-only">선택 단위</span>
-                <select
-                  aria-label="선택 단위"
-                  value={selectionMode}
-                  disabled={busy || loading}
-                  onChange={(event) =>
-                    void changeSelectionMode(event.target.value as SelectionMode)
-                  }
-                  className="rounded-lg border border-stone-200 bg-white px-2 py-2 text-sm"
-                >
-                  <option value="paragraph">블록 선택</option>
-                  <option value="sentence">문장 선택</option>
-                  <option value="object">객체 선택</option>
-                  <option value="graphic">이미지·도형 선택</option>
-                </select>
-              </label>
-              <span className="ribbon-caption">선택 단위</span>
-            </div>
-            <div className="ribbon-group">
-              <label className="flex flex-1 items-center gap-2 text-stone-600">
                 <Type size={18} aria-hidden="true" />
                 <span className="sr-only">글꼴</span>
                 <select
@@ -1141,6 +1152,37 @@ export function PdfPreview({ file }: { file: FileInfo }) {
                 </select>
               </label>
               <div className="flex items-center gap-2" role="group" aria-label="글꼴 굵기">
+                <output
+                  aria-label="글자 크기"
+                  title="PDF에서 감지한 글자 크기"
+                  className="min-w-20 rounded-md border border-stone-200 px-2 py-1 text-sm tabular-nums"
+                >
+                  {selected
+                    ? (() => {
+                        const objects = selected.group
+                          ? selected.group.runs
+                              .map((run) =>
+                                page?.text.objects.find((object) => object.id === run.object),
+                              )
+                              .filter((object): object is TextObject => !!object)
+                          : [selected];
+                        const sizes = [
+                          ...new Set(
+                            objects.map((object) =>
+                              Number(
+                                (
+                                  object.fontSize * Math.hypot(object.matrix[2], object.matrix[3])
+                                ).toFixed(2),
+                              ),
+                            ),
+                          ),
+                        ].sort((a, b) => a - b);
+                        return sizes.length > 1
+                          ? `혼합 (${sizes[0]}–${sizes[sizes.length - 1]} pt)`
+                          : `${sizes[0] ?? selected.fontSize} pt`;
+                      })()
+                    : "— pt"}
+                </output>
                 <IconButton
                   icon={Bold}
                   label="굵게"
@@ -1315,22 +1357,6 @@ export function PdfPreview({ file }: { file: FileInfo }) {
               />
               <span className="ribbon-caption">새 PDF 저장</span>
             </div>
-          </div>
-        )}
-        {editingEnabled && (
-          <div
-            className="flex flex-wrap items-center gap-4 border-b border-stone-200 bg-stone-50 px-6 py-2 text-xs text-stone-600"
-            aria-label="편집 영역 안내"
-          >
-            <span>선택한 블록의 오른쪽 아래 모서리로 크기 조절 · 긴 내용은 자동 줄바꿈</span>
-            <span className="text-emerald-700">초록 점선: 원본 글꼴 편집</span>
-            <span className="text-amber-700">주황 점선: 원본 글꼴 확인 필요</span>
-            <span>회색 점선: 편집 제한</span>
-            {selected?.editBlocked && selected.fontChangeBlocked === null && (
-              <span className="text-amber-800">
-                원본 글꼴 불러오기에서 동일한 글꼴 파일을 선택하세요. 자동으로 대체하지 않습니다.
-              </span>
-            )}
           </div>
         )}
         {fontWarning && (

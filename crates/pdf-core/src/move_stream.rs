@@ -1,5 +1,5 @@
 //! Move text painting instructions while retaining original glyph codes and spacing.
-use crate::{render::PreviewError, text::TextObject};
+use crate::{error::EngineError as PreviewError, text::TextObject};
 use lopdf::{
     content::{Content, Operation},
     Dictionary, Document, Object, Stream,

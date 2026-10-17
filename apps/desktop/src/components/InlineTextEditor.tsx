@@ -107,7 +107,12 @@ export function InlineTextEditor({
           // PDF tracking is independent of the font's default browser advances.
           const width = Number(span.dataset.pdfWidth);
           const count = Array.from(span.textContent ?? "").length;
-          if (width > 0 && count > 1 && typeof CanvasRenderingContext2D !== "undefined") {
+          if (
+            !touched.current &&
+            width > 0 &&
+            count > 1 &&
+            typeof CanvasRenderingContext2D !== "undefined"
+          ) {
             if (context) {
               context.font = `${span.style.fontStyle} ${span.style.fontWeight} ${span.style.fontSize} ${span.style.fontFamily}`;
               const measured = context.measureText(span.textContent ?? "").width;
@@ -119,7 +124,7 @@ export function InlineTextEditor({
           }
         });
         const element = input.current;
-        if (element && element.getBoundingClientRect().width > 0) {
+        if (!touched.current && element && element.getBoundingClientRect().width > 0) {
           const origin = element.getBoundingClientRect().left;
           const stretch = Math.abs(selected.matrix[0] / selected.matrix[3]) || 1;
           // Read layout once before writing margins, rather than forcing layout for every object.
@@ -244,8 +249,19 @@ export function InlineTextEditor({
         delete span.dataset.pdfX;
       });
   }, [selected.alignment]);
-  const read = () => {
+  const releaseOriginalPositions = () => {
     touched.current = true;
+    // Original run offsets align the initial PDF preview only. Keeping them
+    // after inserting/deleting text can pull the following run over its neighbor.
+    input.current?.querySelectorAll<HTMLElement>("[data-source-font]").forEach((span) => {
+      span.style.marginLeft = "0px";
+      span.style.letterSpacing = "normal";
+      delete span.dataset.pdfX;
+      delete span.dataset.pdfWidth;
+    });
+  };
+  const read = () => {
+    releaseOriginalPositions();
     const element = input.current;
     if (element) onDraft(readInlineText(element));
   };
@@ -296,6 +312,7 @@ export function InlineTextEditor({
         suppressContentEditableWarning
         tabIndex={0}
         spellCheck={false}
+        onBeforeInput={releaseOriginalPositions}
         onInput={read}
         onCompositionStart={() => {
           composing.current = true;

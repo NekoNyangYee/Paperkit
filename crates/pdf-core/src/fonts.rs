@@ -1,4 +1,4 @@
-use crate::render::PreviewError;
+use crate::error::EngineError as PreviewError;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::{path::Path, sync::OnceLock};

@@ -25,9 +25,8 @@ fn main() {
                 .and_then(|p| p.parent())
                 .ok_or("Invalid resource path")?
                 .join("fonts");
-            let engine =
-                pdf_core::render::PreviewEngine::start_with_fonts(library, font_directory.clone())
-                    .map_err(|_| std::io::Error::other("Could not start PDFium worker"))?;
+            let engine = pdf_core::Paperframe::start_with_fonts(library, font_directory.clone())
+                .map_err(|_| std::io::Error::other("Could not start PDFium worker"))?;
             app.manage(preview::PreviewState(engine, font_directory));
             Ok(())
         })

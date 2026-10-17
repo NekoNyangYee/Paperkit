@@ -101,6 +101,57 @@ const object = {
   fontChangeBlocked: null,
 };
 
+it("duplicates and deletes pages with the current revision and keeps undo navigation in range", async () => {
+  let count = 2,
+    revision = 0;
+  mocks.invoke.mockImplementation(async (command, args) => {
+    const state = () => ({
+      revision,
+      pageCount: count,
+      dirty: revision > 0,
+      canUndo: revision > 0,
+      canRedo: false,
+    });
+    if (command === "render_selected_page")
+      return {
+        ...page(args.pageIndex, args.width),
+        text: { objects: [object], warning: null },
+        pageCount: count,
+        state: state(),
+      };
+    if (command === "edit_document") {
+      expect(args.revision).toBe(revision);
+      if (args.action.kind === "undo") count++;
+      else if (args.action.operation === "duplicate") count++;
+      else if (args.action.operation === "delete") count--;
+      revision++;
+      return state();
+    }
+  });
+  render(<PdfPreview file={file} />);
+  await enableEditing();
+  expect(screen.queryByRole("combobox", { name: "선택 단위" })).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "2페이지 복제" }));
+  await screen.findByRole("img", { name: "example.pdf · 3페이지" });
+  expect(screen.getByLabelText("전체 3페이지")).toBeTruthy();
+  await waitFor(() =>
+    expect(
+      (screen.getByRole("button", { name: "3페이지 삭제" }) as HTMLButtonElement).disabled,
+    ).toBe(false),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "3페이지 삭제" }));
+  await screen.findByRole("img", { name: "example.pdf · 2페이지" });
+  expect(screen.getByLabelText("전체 2페이지")).toBeTruthy();
+  await waitFor(() =>
+    expect((screen.getByRole("button", { name: "실행 취소" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    ),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "실행 취소" }));
+  await screen.findByLabelText("전체 3페이지");
+  expect(screen.queryByRole("alert")).toBeNull();
+});
+
 it("separates bundled and installed fonts and sends the chosen installed face ID", async () => {
   mocks.fonts.mockResolvedValue([
     { id: "pretendard", name: "Pretendard", source: "bundled" },
@@ -153,6 +204,8 @@ it("detects weight and applies the actual bold face from the toolbar", async () 
   await enableEditing("object");
   fireEvent.click(await screen.findByRole("button", { name: "텍스트 선택: Hello World" }));
   expect(screen.getByRole("button", { name: "굵게" }).getAttribute("aria-pressed")).toBe("false");
+  expect(screen.getByLabelText("글자 크기").textContent).toBe("16 pt");
+  expect(screen.queryByLabelText("편집 영역 안내")).toBeNull();
   fireEvent.click(screen.getByRole("button", { name: "굵게" }));
   await waitFor(() =>
     expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
@@ -811,7 +864,7 @@ it("selects a reconstructed sentence and submits one revision-scoped transaction
   );
   render(<PdfPreview file={file} />);
   await enableEditing();
-  fireEvent.doubleClick(await screen.findByRole("button", { name: "문장 선택: Hello World" }));
+  fireEvent.doubleClick(await screen.findByRole("button", { name: "블록 선택: Hello World" }));
   expect(screen.getByRole("option", { name: "혼합" })).toBeTruthy();
   expect((screen.getByRole("combobox", { name: "글꼴" }) as HTMLSelectElement).disabled).toBe(true);
   fireEvent.input(await screen.findByRole("textbox", { name: "내용" }), {
@@ -822,45 +875,27 @@ it("selects a reconstructed sentence and submits one revision-scoped transaction
     expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
       fileId: file.id,
       revision: 0,
-      action: { kind: "replaceGroup", page: 0, group: 1, text: "Hallo World" },
+      action: { kind: "replaceGroup", page: 0, group: 0, text: "Hallo World" },
     }),
   );
 });
 
-it("keeps rejected group input and confirms discard before switching sentence/paragraph/object selection", async () => {
+it("keeps rejected block input with no selection mode switch", async () => {
   mocks.invoke.mockImplementation(async (command, args) => {
     if (command === "render_selected_page") return groupedPage(args.pageIndex, args.width);
     if (command === "edit_document") throw "글자 수와 공백 위치를 유지해야 합니다.";
   });
   render(<PdfPreview file={file} />);
   await enableEditing();
-  fireEvent.doubleClick(await screen.findByRole("button", { name: "문장 선택: Hello World" }));
+  fireEvent.doubleClick(await screen.findByRole("button", { name: "블록 선택: Hello World" }));
   fireEvent.input(await screen.findByRole("textbox", { name: "내용" }), {
     target: { textContent: "Short" },
   });
   fireEvent.click(screen.getByRole("button", { name: "적용" }));
   await screen.findByText("글자 수와 공백 위치를 유지해야 합니다.");
   expect((await screen.findByRole("textbox", { name: "내용" })).textContent).toBe("Short");
-  mocks.confirm.mockResolvedValueOnce(false);
-  fireEvent.change(screen.getByRole("combobox", { name: "선택 단위" }), {
-    target: { value: "paragraph" },
-  });
-  await waitFor(() => expect(mocks.confirm).toHaveBeenCalled());
-  expect((screen.getByRole("combobox", { name: "선택 단위" }) as HTMLSelectElement).value).toBe(
-    "sentence",
-  );
-  mocks.confirm.mockResolvedValueOnce(true);
-  fireEvent.change(screen.getByRole("combobox", { name: "선택 단위" }), {
-    target: { value: "paragraph" },
-  });
-  await screen.findByRole("button", { name: "블록 선택: Hello World" });
-  fireEvent.change(screen.getByRole("combobox", { name: "선택 단위" }), {
-    target: { value: "object" },
-  });
-  fireEvent.doubleClick(await screen.findByRole("button", { name: "텍스트 선택: Hello" }));
-  expect((screen.getByRole("combobox", { name: "글꼴" }) as HTMLSelectElement).disabled).toBe(
-    false,
-  );
+  expect(screen.queryByRole("combobox", { name: "선택 단위" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "텍스트 선택: Hello" })).toBeNull();
 });
 
 it("marks uncertain groups read-only while retaining explicit object selection", async () => {
@@ -869,7 +904,7 @@ it("marks uncertain groups read-only while retaining explicit object selection",
   );
   render(<PdfPreview file={file} />);
   await enableEditing();
-  fireEvent.doubleClick(await screen.findByRole("button", { name: "문장 선택: Hello World" }));
+  fireEvent.doubleClick(await screen.findByRole("button", { name: "블록 선택: Hello World" }));
   expect(screen.queryByRole("textbox", { name: "내용" })).toBeNull();
   expect(screen.getByText(/열 또는 셀 경계가 불확실/, { selector: "span" })).toBeTruthy();
   expect((screen.getByRole("button", { name: "적용" }) as HTMLButtonElement).disabled).toBe(true);
@@ -891,7 +926,7 @@ it("switches from text selection to recognized graphics without a text hit layer
   render(<PdfPreview file={file} />);
   await enableEditing("graphic");
   const image = await screen.findByRole("button", { name: "이미지 10 선택" });
-  expect(screen.queryByLabelText("텍스트 객체 선택")).toBeNull();
+  expect(screen.getByLabelText("텍스트 객체 선택")).toBeTruthy();
   fireEvent.click(image);
   expect(image.getAttribute("aria-pressed")).toBe("true");
   expect(mocks.invoke.mock.calls.filter(([command]) => command === "edit_document")).toHaveLength(
@@ -899,16 +934,13 @@ it("switches from text selection to recognized graphics without a text hit layer
   );
 });
 
-async function enableEditing(mode = "sentence") {
+async function enableEditing(_mode?: string) {
   await waitFor(() =>
     expect((screen.getByRole("button", { name: "편집 사용" }) as HTMLButtonElement).disabled).toBe(
       false,
     ),
   );
   fireEvent.click(screen.getByRole("button", { name: "편집 사용" }));
-  fireEvent.change(screen.getByRole("combobox", { name: "선택 단위" }), {
-    target: { value: mode },
-  });
 }
 
 it.each([

@@ -1,10 +1,10 @@
 use crate::commands::AppState;
 use base64::Engine;
-use pdf_core::render::{PreviewEngine, PreviewError};
+use pdf_core::{EngineError as PreviewError, Paperframe};
 use serde::Serialize;
 use tauri::State;
 
-pub struct PreviewState(pub PreviewEngine, pub std::path::PathBuf);
+pub struct PreviewState(pub Paperframe, pub std::path::PathBuf);
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -45,6 +45,7 @@ fn message(error: PreviewError) -> String {
             "PDF 문서를 열 수 없습니다. 손상되었거나 지원하지 않는 형식입니다."
         }
         PreviewError::InvalidPage => "존재하지 않는 페이지입니다.",
+        PreviewError::LastPage => "마지막 한 페이지는 삭제할 수 없습니다.",
         PreviewError::RenderFailed => "페이지를 표시하지 못했습니다. 다시 시도해 주세요.",
         PreviewError::StaleObject => "문서가 변경되었습니다. 페이지를 다시 확인해 주세요.",
         PreviewError::EditFailed => "텍스트를 수정하지 못했습니다. 기존 내용은 유지됩니다.",

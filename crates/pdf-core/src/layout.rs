@@ -351,8 +351,13 @@ fn build(
                 && restricted_run(&p.glyphs) == restricted_run(&l.glyphs)
                 && dy > 0.7 * l.em
                 && dy <= gap_limit * l.em.max(p.em)
-                && p.rect[1] - l.rect[3] < 0.8 * l.em
-                && ((p.rect[0] - l.rect[0]).abs() < 1.5 * l.em || first_line_indent)
+                // Ink boxes can be much shorter than the font's line spacing.
+                // Use the observed baseline rhythm instead of a fixed ink-gap cap.
+                && p.rect[1] - l.rect[3] < (gap_limit - 0.65) * l.em.max(p.em)
+                && ((p.rect[0] - l.rect[0]).abs() < 1.5 * l.em
+                    || first_line_indent
+                    || ((p.rect[0] + p.rect[2]) - (l.rect[0] + l.rect[2])).abs()
+                        < 1.2 * l.em)
                 && (p.em - l.em).abs() < 0.5 * l.em.max(p.em)
                 && !barrier(p.rect, l.rect, rules)
                 && {
@@ -864,6 +869,40 @@ mod tests {
                 if y == 74.0 { 2 } else { 1 }
             );
         }
+    }
+    #[test]
+    fn double_spaced_body_is_one_block_without_crossing_a_paragraph_gap() {
+        let g = groups(
+            vec![
+                fragment(0, "A complete sentence.", 0.0, 100.0),
+                fragment(1, "Continues on the next row", 0.0, 80.0),
+                fragment(2, "and ends here.", 0.0, 60.0),
+                fragment(3, "Separate paragraph", 0.0, 30.0),
+            ],
+            &[],
+        );
+        let blocks: Vec<_> = g
+            .iter()
+            .filter(|g| g.kind == GroupKind::Paragraph)
+            .collect();
+        assert_eq!(blocks.len(), 2);
+        assert_eq!(blocks[0].bounds.len(), 3);
+        assert!(blocks[0].text.contains("Continues on the next row"));
+    }
+    #[test]
+    fn centered_lines_with_different_widths_form_one_block() {
+        let g = groups(
+            vec![
+                fragment(0, "A long centered line", 0.0, 100.0),
+                fragment(1, "Short line", 30.0, 86.0),
+            ],
+            &[],
+        );
+        assert_eq!(
+            g.iter().filter(|g| g.kind == GroupKind::Paragraph).count(),
+            1
+        );
+        assert_eq!(g[0].bounds.len(), 2);
     }
     #[test]
     fn large_line_gap_or_indent_starts_new_paragraph() {

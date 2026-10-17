@@ -1,5 +1,5 @@
 //! Restore non-edited text spacing omitted by PDFium's content generator.
-use crate::{render::PreviewError, text::TextObject};
+use crate::{error::EngineError as PreviewError, text::TextObject};
 use lopdf::{
     content::{Content, Operation},
     Dictionary, Document, Object, Stream,

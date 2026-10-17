@@ -1,5 +1,5 @@
 //! Translate complete text objects without changing fonts or rebuilding text.
-use crate::{layout, render::PreviewError, text};
+use crate::{error::EngineError as PreviewError, layout, text};
 use pdfium_render::prelude::*;
 use std::collections::BTreeSet;
 

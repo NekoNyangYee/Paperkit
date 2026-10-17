@@ -11,6 +11,7 @@ pub mod fonts;
 mod graphics;
 pub mod layout;
 mod movement;
+pub mod pages;
 pub mod render;
 mod save;
 pub mod selection;
@@ -18,7 +19,15 @@ mod system_fonts;
 pub mod text;
 
 mod move_stream;
+mod text_patch;
 mod text_spacing;
 mod verification;
 
 pub mod alignment;
+
+mod editing;
+pub mod engine;
+pub mod error;
+pub use engine::Paperframe;
+pub use error::EngineError;
+pub const ENGINE_NAME: &str = "Paperframe";

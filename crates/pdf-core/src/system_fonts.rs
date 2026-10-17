@@ -1,5 +1,5 @@
 //! Exact face-name lookup; never substitute a family or guess a font weight.
-use crate::{fonts::validate_original, render::PreviewError};
+use crate::{error::EngineError as PreviewError, fonts::validate_original};
 use std::{
     collections::HashMap,
     path::PathBuf,

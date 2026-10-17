@@ -1,8 +1,8 @@
 //! Bounded reflow of a complete, uniformly styled paragraph. Mixed styles remain
 //! on the source-range edit path; no PDF overlay is used.
 use crate::{
+    error::EngineError as PreviewError,
     layout::{self, GroupKind, TextGroup},
-    render::PreviewError,
     text::{self, TextObject},
 };
 use pdfium_render::prelude::*;
