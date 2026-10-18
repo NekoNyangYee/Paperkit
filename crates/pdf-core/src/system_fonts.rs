@@ -1,4 +1,4 @@
-//! Exact face-name lookup; never substitute a family or guess a font weight.
+//! Map PDF, localized, full and PostScript names to the same font face.
 use crate::{error::EngineError as PreviewError, fonts::validate_original};
 use std::{
     collections::HashMap,
@@ -72,19 +72,16 @@ pub(crate) fn register_bundled(directory: &std::path::Path) {
     }
 }
 pub(crate) fn available(name: &str) -> bool {
-    imported()
-        .lock()
-        .is_ok_and(|fonts| fonts.contains_key(&normalized(name)))
-        || index().contains_key(&normalized(name))
+    load(name, "").is_ok()
 }
 
-fn normalized(name: &str) -> String {
+pub(crate) fn normalized(name: &str) -> String {
     let name = name
         .split_once('+')
         .filter(|(prefix, _)| prefix.len() == 6 && prefix.bytes().all(|b| b.is_ascii_uppercase()))
         .map_or(name, |(_, name)| name);
     name.chars()
-        .filter(|c| !c.is_whitespace() && *c != '-')
+        .filter(|c| !c.is_whitespace() && !matches!(*c, '-' | '_' | ','))
         .flat_map(char::to_lowercase)
         .collect()
 }
@@ -101,12 +98,38 @@ fn names(data: &[u8], index: u32) -> Vec<String> {
     {
         return vec![];
     }
-    face.names()
+    let mut aliases: Vec<_> = face
+        .names()
         .into_iter()
         .filter(|n| matches!(n.name_id, 4 | 6))
         .filter_map(|n| n.to_string())
         .map(|n| normalized(&n))
-        .collect()
+        .collect();
+    // Family names alone are safe only for the default regular face. Bold and
+    // italic faces require their subfamily so they cannot mask a missing style.
+    let records: Vec<_> = face
+        .names()
+        .into_iter()
+        .filter_map(|n| n.to_string().map(|value| (n.name_id, value)))
+        .collect();
+    for (family_id, style_id) in [(1, 2), (16, 17)] {
+        for (_, family) in records.iter().filter(|(id, _)| *id == family_id) {
+            if face.weight().to_number() == 400
+                && !face.is_italic()
+                && !face.is_oblique()
+                && face.width().to_number() == 5
+            {
+                aliases.push(normalized(family));
+                aliases.push(normalized(&format!("{family} Regular")));
+            }
+            for (_, style) in records.iter().filter(|(id, _)| *id == style_id) {
+                aliases.push(normalized(&format!("{family} {style}")));
+            }
+        }
+    }
+    aliases.sort();
+    aliases.dedup();
+    aliases
 }
 
 fn index() -> &'static HashMap<String, Vec<(PathBuf, u32)>> {
@@ -156,6 +179,55 @@ fn index() -> &'static HashMap<String, Vec<(PathBuf, u32)>> {
         }
         result
     })
+}
+
+pub(crate) fn catalog_faces() -> Vec<crate::fonts::FontInfo> {
+    let faces: std::collections::BTreeSet<_> = index().values().flatten().cloned().collect();
+    let mut result = Vec::new();
+    for (path, index) in faces {
+        let Ok(data) = std::fs::read(&path) else {
+            continue;
+        };
+        let Ok(face) = ttf_parser::Face::parse(&data, index) else {
+            continue;
+        };
+        if !face.is_outline_embedding_allowed() {
+            continue;
+        }
+        let records: Vec<_> = face
+            .names()
+            .into_iter()
+            .filter_map(|n| n.to_string().map(|s| (n.name_id, s)))
+            .collect();
+        let Some((_, name)) = records
+            .iter()
+            .find(|(id, _)| *id == 6)
+            .or_else(|| records.iter().find(|(id, _)| *id == 4))
+        else {
+            continue;
+        };
+        let label = records
+            .iter()
+            .find(|(id, _)| *id == 4)
+            .map_or(name.clone(), |(_, s)| s.clone());
+        let mut aliases = names(&data, index);
+        aliases.extend(
+            records
+                .iter()
+                .filter(|(id, _)| matches!(*id, 4 | 6))
+                .map(|(_, s)| s.clone()),
+        );
+        result.push(crate::fonts::FontInfo {
+            id: format!("installed:{name}"),
+            name: label,
+            file: String::new(),
+            sha256: String::new(),
+            postscript_names: aliases,
+            source: "installed".into(),
+        });
+    }
+    result.sort_by(|a, b| a.name.cmp(&b.name));
+    result
 }
 
 // Extract a TTC face into a standalone sfnt shared by PDFium and FontFace.
@@ -249,6 +321,10 @@ mod tests {
             normalized("Example Bold")
         );
         assert_ne!(normalized("Example-Bold"), normalized("Example-Regular"));
+        assert_eq!(
+            normalized("ABCDEF+Example,Bold"),
+            normalized("Example_Bold")
+        );
         assert_ne!(normalized("Example+Bold"), normalized("Bold"));
     }
     #[test]

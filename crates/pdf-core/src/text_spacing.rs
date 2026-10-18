@@ -1,4 +1,4 @@
-//! Restore non-edited text spacing omitted by PDFium's content generator.
+//! Restore spacing and the stroke coordinate system lost by PDFium regeneration.
 use crate::{error::EngineError as PreviewError, text::TextObject};
 use lopdf::{
     content::{Content, Operation},
@@ -74,10 +74,39 @@ pub(crate) fn stored_text(bytes: &[u8], index: i32, count: usize) -> Option<Vec<
     }
     (values.len() == count).then_some(values)
 }
-fn spacing(operations: &[Operation]) -> Result<Vec<[f32; 2]>, PreviewError> {
-    let mut state = [0.0, 0.0];
+#[derive(Clone, Copy)]
+struct State {
+    spacing: [f32; 2],
+    ctm: [f32; 6],
+    tm: [f32; 6],
+    line: [f32; 6],
+    leading: f32,
+    horizontal: f32,
+    rise: f32,
+    width: f32,
+    mode: i32,
+}
+impl State {
+    fn stroked(&self) -> bool {
+        matches!(self.mode, 1 | 2 | 5 | 6)
+    }
+}
+fn spacing(operations: &[Operation]) -> Result<Vec<State>, PreviewError> {
+    let identity = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
+    let mut state = State {
+        spacing: [0.0, 0.0],
+        ctm: identity,
+        tm: identity,
+        line: identity,
+        leading: 0.0,
+        horizontal: 100.0,
+        rise: 0.0,
+        width: 1.0,
+        mode: 0,
+    };
     let mut stack = Vec::new();
     let mut values = Vec::new();
+    let mut positioned = false;
     for op in operations {
         let number = |i: usize| {
             op.operands
@@ -89,13 +118,61 @@ fn spacing(operations: &[Operation]) -> Result<Vec<[f32; 2]>, PreviewError> {
         match op.operator.as_str() {
             "q" => stack.push(state),
             "Q" => state = stack.pop().ok_or(PreviewError::VerificationFailed)?,
-            "Tc" => state[0] = number(0)?,
-            "Tw" => state[1] = number(0)?,
-            "\"" => state = [number(1)?, number(0)?],
+            "BT" => {
+                state.tm = identity;
+                state.line = identity;
+                positioned = true;
+            }
+            "cm" => {
+                let mut m = identity;
+                for (i, v) in m.iter_mut().enumerate() {
+                    *v = number(i)?;
+                }
+                state.ctm = crate::move_stream::multiply(state.ctm, m);
+            }
+            "Tm" => {
+                for (i, v) in state.tm.iter_mut().enumerate() {
+                    *v = number(i)?;
+                }
+                positioned = true;
+                state.line = state.tm;
+            }
+            "Td" | "TD" => {
+                let x = number(0)?;
+                let y = number(1)?;
+                if op.operator == "TD" {
+                    state.leading = -y;
+                }
+                state.line = crate::move_stream::multiply(state.line, [1.0, 0.0, 0.0, 1.0, x, y]);
+                state.tm = state.line;
+                positioned = true;
+            }
+            "T*" | "'" | "\"" => {
+                state.line = crate::move_stream::multiply(
+                    state.line,
+                    [1.0, 0.0, 0.0, 1.0, 0.0, -state.leading],
+                );
+                state.tm = state.line;
+                positioned = true;
+                if op.operator == "\"" {
+                    state.spacing = [number(1)?, number(0)?];
+                }
+            }
+            "TL" => state.leading = number(0)?,
+            "Tz" => state.horizontal = number(0)?,
+            "Ts" => state.rise = number(0)?,
+            "Tr" => state.mode = number(0)? as i32,
+            "w" => state.width = number(0)?,
+            "Tc" => state.spacing[0] = number(0)?,
+            "Tw" => state.spacing[1] = number(0)?,
             _ => (),
         }
         if text_show(op) {
+            if state.stroked() && !positioned {
+                return Err(PreviewError::VerificationFailed);
+            }
             values.push(state);
+            positioned = false;
         }
     }
     Ok(values)
@@ -123,7 +200,10 @@ pub(crate) fn preserve(
         Content::decode_strict(&bytes).map_err(|_| PreviewError::VerificationFailed)
     };
     let source = spacing(&decode(&old, old_page)?.operations)?;
-    if source.iter().all(|s| *s == [0.0, 0.0]) {
+    if source
+        .iter()
+        .all(|s| s.spacing == [0.0, 0.0] && !s.stroked())
+    {
         return Ok(edited);
     }
     if source.len() != objects.len() {
@@ -144,7 +224,7 @@ pub(crate) fn preserve(
         return Err(PreviewError::VerificationFailed);
     }
     let mut expected = vec![None; candidates.len()];
-    for (o, s) in objects
+    for (o, mut s) in objects
         .iter()
         .zip(source)
         .filter(|(o, _)| !removed.contains(&o.id))
@@ -167,6 +247,20 @@ pub(crate) fn preserve(
         if matches.len() != 1 || expected[matches[0]].is_some() {
             return Err(PreviewError::VerificationFailed);
         }
+        if s.stroked() {
+            let original = crate::move_stream::multiply(
+                s.ctm,
+                crate::move_stream::multiply(
+                    s.tm,
+                    [s.horizontal / 100.0, 0.0, 0.0, 1.0, 0.0, s.rise],
+                ),
+            );
+            let inverse = crate::move_stream::inverse(s.ctm)?;
+            let dx = o.matrix[4] - original[4];
+            let dy = o.matrix[5] - original[5];
+            s.tm[4] += inverse[0] * dx + inverse[2] * dy;
+            s.tm[5] += inverse[1] * dx + inverse[3] * dy;
+        }
         expected[matches[0]] = Some(s);
     }
     let mut doc = Document::load_mem(&edited).map_err(|_| PreviewError::VerificationFailed)?;
@@ -181,20 +275,60 @@ pub(crate) fn preserve(
     }
     let mut output = Vec::new();
     let mut ordinal = 0;
+    let mut shows_in_text_object = 0;
+    let mut restored_stroke = false;
     for op in content.operations {
+        if op.operator == "BT" {
+            shows_in_text_object = 0;
+            restored_stroke = false;
+        }
         if text_show(&op) {
+            if restored_stroke {
+                return Err(PreviewError::VerificationFailed);
+            }
             let previous = current[ordinal];
             let target = expected[ordinal].unwrap_or(previous);
             ordinal += 1;
-            if target != previous {
+            shows_in_text_object += 1;
+            if target.stroked() {
+                restored_stroke = true;
+                if shows_in_text_object != 1 || !matches!(op.operator.as_str(), "Tj" | "TJ") {
+                    return Err(PreviewError::VerificationFailed);
+                }
+                // A text matrix scales glyph outlines, but not their stroke
+                // width. Keep the original graphics CTM for stroked headings;
+                // copying only the raw pen width makes them many times thicker.
+                let local = crate::move_stream::multiply(
+                    crate::move_stream::inverse(previous.ctm)?,
+                    target.ctm,
+                );
+                output.push(Operation::new("q", vec![]));
+                output.push(Operation::new(
+                    "cm",
+                    local.into_iter().map(Object::Real).collect(),
+                ));
+                output.push(Operation::new(
+                    "Tm",
+                    target.tm.into_iter().map(Object::Real).collect(),
+                ));
+                output.push(Operation::new("w", vec![target.width.into()]));
+                output.push(Operation::new("Tz", vec![target.horizontal.into()]));
+                output.push(Operation::new("Ts", vec![target.rise.into()]));
+                output.push(Operation::new("Tc", vec![target.spacing[0].into()]));
+                output.push(Operation::new("Tw", vec![target.spacing[1].into()]));
+                output.push(op);
+                output.push(Operation::new("Q", vec![]));
+                continue;
+            }
+            if target.spacing != previous.spacing {
                 if !matches!(op.operator.as_str(), "Tj" | "TJ") {
                     return Err(PreviewError::VerificationFailed);
                 }
-                output.push(Operation::new("Tc", vec![target[0].into()]));
-                output.push(Operation::new("Tw", vec![target[1].into()]));
+                output.push(Operation::new("Tc", vec![target.spacing[0].into()]));
+                output.push(Operation::new("Tw", vec![target.spacing[1].into()]));
                 output.push(op);
-                output.push(Operation::new("Tc", vec![previous[0].into()]));
-                output.push(Operation::new("Tw", vec![previous[1].into()]));
+                output.push(Operation::new("Tc", vec![previous.spacing[0].into()]));
+                output.push(Operation::new("Tw", vec![previous.spacing[1].into()]));
                 continue;
             }
         }

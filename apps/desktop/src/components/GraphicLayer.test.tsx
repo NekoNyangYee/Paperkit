@@ -129,3 +129,101 @@ it("resizes and deletes the selected object", async () => {
     expect(edit).toHaveBeenLastCalledWith({ kind: "deleteGraphic", page: 0, object: 0 }),
   );
 });
+
+it("changes only the requested dimension with side handles", async () => {
+  const edit = vi.fn().mockResolvedValue(false);
+  render(<GraphicLayer page={page} disabled={false} onEdit={edit} onSelect={() => {}} />);
+  fireEvent.click(screen.getByRole("button", { name: "이미지 1 선택" }));
+  const horizontal = screen.getByRole("button", { name: "이미지·도형 가로 조절" });
+  fireEvent.pointerDown(horizontal, { clientX: 110, clientY: 45 });
+  fireEvent.pointerMove(horizontal, { clientX: 210, clientY: 150 });
+  fireEvent.pointerUp(horizontal);
+  await waitFor(() =>
+    expect(edit).toHaveBeenCalledWith({
+      kind: "transformGraphic",
+      page: 0,
+      object: 0,
+      matrix: [2, 0, 0, 1, -10, 0],
+    }),
+  );
+  await waitFor(() =>
+    expect(screen.getByRole("button", { name: "이미지·도형 삭제" }).hasAttribute("disabled")).toBe(
+      false,
+    ),
+  );
+  const vertical = screen.getByRole("button", { name: "이미지·도형 세로 조절" });
+  fireEvent.pointerDown(vertical, { clientX: 50, clientY: 70 });
+  fireEvent.pointerMove(vertical, { clientX: 300, clientY: 120 });
+  fireEvent.pointerUp(vertical);
+  await waitFor(() =>
+    expect(edit).toHaveBeenLastCalledWith({
+      kind: "transformGraphic",
+      page: 0,
+      object: 0,
+      matrix: [1, 0, 0, 2, 0, -70],
+    }),
+  );
+});
+
+it("copies a snapshot and pastes it after changing pages, without using stale object IDs", async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal("navigator", Object.create(navigator, { clipboard: { value: { writeText } } }));
+  vi.mocked(invoke).mockImplementation(async (command) =>
+    command === "copy_graphic" ? [37, 80, 68, 70] : "data:image/png;base64,AA==",
+  );
+  const edit = vi.fn().mockResolvedValue(false);
+  const { rerender } = render(
+    <GraphicLayer page={page} disabled={false} onEdit={edit} onSelect={() => {}} />,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "이미지 1 선택" }));
+  fireEvent.click(screen.getByRole("button", { name: "이미지·도형 복사" }));
+  await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
+  expect(invoke).toHaveBeenCalledWith("copy_graphic", {
+    fileId: "a",
+    revision: 0,
+    pageIndex: 0,
+    objectId: 0,
+  });
+  const marker = writeText.mock.calls[0][0];
+  rerender(
+    <GraphicLayer
+      page={{ ...page, pageIndex: 1, state: { ...page.state, revision: 3 } }}
+      disabled={false}
+      onEdit={edit}
+      onSelect={() => {}}
+    />,
+  );
+  fireEvent.paste(document, { clipboardData: { getData: () => marker, items: [] } });
+  await waitFor(() =>
+    expect(edit).toHaveBeenCalledWith({ kind: "pasteGraphic", page: 1, source: [37, 80, 68, 70] }),
+  );
+  edit.mockClear();
+  fireEvent.paste(document, {
+    clipboardData: { getData: () => "unrelated copied text", items: [] },
+  });
+  expect(edit).not.toHaveBeenCalled();
+});
+
+it("pastes an external clipboard image and leaves native text paste alone", async () => {
+  const edit = vi.fn().mockResolvedValue(false);
+  render(<GraphicLayer page={page} disabled={false} onEdit={edit} onSelect={() => {}} />);
+  const image = {
+    type: "image/png",
+    size: 4,
+    arrayBuffer: async () => new Uint8Array([1, 2, 3, 4]).buffer,
+  };
+  const clipboardData = {
+    getData: () => "",
+    items: [{ type: "image/png", getAsFile: () => image }],
+  };
+  fireEvent.paste(document, { clipboardData });
+  await waitFor(() =>
+    expect(edit).toHaveBeenCalledWith({ kind: "pasteImage", page: 0, png: [1, 2, 3, 4] }),
+  );
+  edit.mockClear();
+  const input = document.createElement("textarea");
+  document.body.append(input);
+  fireEvent.paste(input, { clipboardData });
+  expect(edit).not.toHaveBeenCalled();
+  input.remove();
+});

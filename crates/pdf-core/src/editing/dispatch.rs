@@ -13,6 +13,18 @@ pub(super) fn apply(
     font_directory: &Path,
 ) -> Result<Vec<u8>, PreviewError> {
     Ok(match action {
+        EditAction::ScaleText {
+            page,
+            objects,
+            sx,
+            sy,
+        } => crate::movement::scale(pdfium, original, page, &objects, sx, sy)?,
+        EditAction::PasteGraphic { page, source } => {
+            crate::graphics::paste(pdfium, original, page, &source)?
+        }
+        EditAction::PasteImage { page, png } => {
+            crate::graphics::paste_image(pdfium, original, page, &png)?
+        }
         EditAction::Page {
             page,
             operation,

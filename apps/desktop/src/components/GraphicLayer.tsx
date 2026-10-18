@@ -1,10 +1,18 @@
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Trash2, X } from "lucide-react";
+import { Copy, Trash2, X } from "lucide-react";
 import type { EditAction, PreviewPage, GraphicObject } from "../lib/preview";
 import { graphicBox, graphicTransform, type Box } from "../lib/graphic-transform";
 import { IconButton } from "./ui/icon-button";
 import { MessageDialog } from "./MessageDialog";
+import { SizeControls } from "./SizeControls";
+import {
+  rememberGraphic,
+  recalledGraphic,
+  clipboardImage,
+  graphicPreview,
+  isTextInput,
+} from "../lib/graphic-clipboard";
 const labels = { image: "이미지", path: "도형", shading: "음영", form: "복합 객체" };
 export function GraphicLayer({
   page,
@@ -33,13 +41,90 @@ export function GraphicLayer({
     x: number;
     y: number;
     box: Box;
-    resize: boolean;
+    resize: false | "both" | "x" | "y";
     ratio: number;
     object: GraphicObject;
   } | null>(null);
   const pendingBox = useRef<Box | null>(null);
   const old = selected && graphicBox(selected.screenBounds);
   const box = next ?? old;
+  const [copying, setCopying] = useState(false);
+  const copyingRef = useRef(false);
+  async function copySelected() {
+    if (!selected || disabled || committing || copyingRef.current) return;
+    copyingRef.current = true;
+    setCopying(true);
+    try {
+      const source = await invoke<number[]>("copy_graphic", {
+        fileId: page.fileId,
+        revision: page.state.revision,
+        pageIndex: page.pageIndex,
+        objectId: selected.id,
+      });
+      if (!Array.isArray(source) || !source.length) throw new Error();
+      const marker = rememberGraphic(source);
+      if (
+        typeof ClipboardItem !== "undefined" &&
+        navigator.clipboard?.write &&
+        layers?.foreground
+      ) {
+        try {
+          const png = await graphicPreview(layers.foreground, graphicBox(selected.screenBounds));
+          await navigator.clipboard.write([
+            new ClipboardItem({
+              "text/plain": new Blob([marker], { type: "text/plain" }),
+              "image/png": png,
+            }),
+          ]);
+        } catch {
+          await navigator.clipboard.writeText(marker);
+        }
+      } else await navigator.clipboard.writeText(marker);
+    } catch {
+      setError("객체를 클립보드에 복사하지 못했습니다. 다시 시도해 주세요.");
+    } finally {
+      copyingRef.current = false;
+      setCopying(false);
+    }
+  }
+  async function paste(source: number[] | null, image?: Blob | null) {
+    if (disabled || committing) return;
+    try {
+      if (source) {
+        onSelect();
+        await apply({ kind: "pasteGraphic", page: page.pageIndex, source });
+      } else if (image) {
+        const png = await clipboardImage(image);
+        onSelect();
+        await apply({ kind: "pasteImage", page: page.pageIndex, png });
+      }
+    } catch {
+      setError("클립보드의 이미지를 붙여넣지 못했습니다.");
+    }
+  }
+  useEffect(() => {
+    const copy = (event: ClipboardEvent) => {
+      if (!selected || disabled || committing || isTextInput(event.target)) return;
+      event.preventDefault();
+      void copySelected();
+    };
+    const pasteEvent = (event: ClipboardEvent) => {
+      if (disabled || committing || isTextInput(event.target)) return;
+      const source = recalledGraphic(event.clipboardData?.getData("text/plain") ?? "");
+      const image = Array.from(event.clipboardData?.items ?? [])
+        .find((item) => item.type.startsWith("image/"))
+        ?.getAsFile();
+      if (!source && !image) return;
+      event.preventDefault();
+      void paste(source, image);
+    };
+    document.addEventListener("copy", copy);
+    document.addEventListener("paste", pasteEvent);
+    return () => {
+      document.removeEventListener("copy", copy);
+      document.removeEventListener("paste", pasteEvent);
+    };
+  }, [selected, disabled, committing, page, layers]);
   useEffect(() => {
     if (textSelected) setId(null);
   }, [textSelected]);
@@ -90,6 +175,7 @@ export function GraphicLayer({
         setNext(null);
         setCommitting(false);
       }
+      return ok;
     } catch {
       setNext(null);
       setCommitting(false);
@@ -103,7 +189,7 @@ export function GraphicLayer({
     setNext(null);
     setError(null);
   }
-  function start(event: React.PointerEvent, resize: boolean, object = selected) {
+  function start(event: React.PointerEvent, resize: false | "both" | "x" | "y", object = selected) {
     event.stopPropagation();
     event.preventDefault();
     if (!object || disabled || committing || event.button !== 0) return;
@@ -128,8 +214,14 @@ export function GraphicLayer({
     const b = d.resize
       ? {
           ...d.box,
-          width: Math.max(6, Math.min(page.width - d.box.left, d.box.width + dx)),
-          height: Math.max(6, Math.min(page.height - d.box.top, d.box.height + dy)),
+          width:
+            d.resize === "y"
+              ? d.box.width
+              : Math.max(6, Math.min(page.width - d.box.left, d.box.width + dx)),
+          height:
+            d.resize === "x"
+              ? d.box.height
+              : Math.max(6, Math.min(page.height - d.box.top, d.box.height + dy)),
         }
       : {
           ...d.box,
@@ -261,19 +353,52 @@ export function GraphicLayer({
               aria-label="이미지·도형 크기 조절"
               className="absolute -bottom-2 -right-2 h-4 w-4 cursor-nwse-resize rounded-sm border-2 border-white bg-blue-600"
               style={{ touchAction: "none" }}
-              onPointerDown={(e) => start(e, true)}
+              onPointerDown={(e) => start(e, "both")}
+            />
+            <button
+              aria-label="이미지·도형 가로 조절"
+              className="absolute -right-2 top-1/2 h-4 w-3 cursor-ew-resize border border-white bg-blue-600"
+              onPointerDown={(e) => start(e, "x")}
+            />
+            <button
+              aria-label="이미지·도형 세로 조절"
+              className="absolute -bottom-2 left-1/2 h-3 w-4 cursor-ns-resize border border-white bg-blue-600"
+              onPointerDown={(e) => start(e, "y")}
             />
           </div>
           <div
-            className="pointer-events-auto absolute flex rounded-md border bg-white shadow"
+            className="pointer-events-auto absolute z-30 flex flex-wrap items-center gap-1 rounded-md border bg-white p-1 shadow"
             style={{
-              left: Math.max(0, Math.min(page.width - 88, box.left + box.width / 2 - 40)),
+              left: Math.max(0, Math.min(page.width - 380, box.left)),
               top:
                 box.top + box.height + 38 < page.height
                   ? box.top + box.height + 5
                   : Math.max(0, box.top - 38),
             }}
           >
+            <SizeControls
+              key={`${selected.id}:${old?.width}:${old?.height}`}
+              label="이미지·도형"
+              width={old!.width}
+              height={old!.height}
+              disabled={disabled || committing}
+              onApply={(width, height) => {
+                const matrix = graphicTransform(selected, { ...old!, width, height });
+                if (matrix)
+                  void apply({
+                    kind: "transformGraphic",
+                    page: page.pageIndex,
+                    object: selected.id,
+                    matrix,
+                  });
+              }}
+            />
+            <IconButton
+              icon={Copy}
+              label="이미지·도형 복사"
+              disabled={disabled || committing || copying}
+              onClick={() => void copySelected()}
+            />
             <IconButton
               icon={Trash2}
               label="이미지·도형 삭제"

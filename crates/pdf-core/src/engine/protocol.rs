@@ -6,6 +6,13 @@ use crate::{
 };
 use std::{path::PathBuf, sync::mpsc::SyncSender};
 pub(super) enum Request {
+    CopyGraphic {
+        id: String,
+        revision: u64,
+        page: i32,
+        object: usize,
+        reply: SyncSender<Result<Vec<u8>, PreviewError>>,
+    },
     Background {
         foreground: bool,
         id: String,

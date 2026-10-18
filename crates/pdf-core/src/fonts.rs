@@ -59,6 +59,17 @@ pub fn available() -> Vec<FontInfo> {
             });
         }
     }
+    for face in crate::system_fonts::catalog_faces() {
+        if !result.iter().any(|font| {
+            font.postscript_names.iter().any(|name| {
+                face.postscript_names.iter().any(|alias| {
+                    crate::system_fonts::normalized(name) == crate::system_fonts::normalized(alias)
+                })
+            })
+        }) {
+            result.push(face);
+        }
+    }
     result
 }
 
@@ -155,6 +166,11 @@ pub(crate) fn same_face_in_document(
         if validate_original(bytes, text).is_ok() {
             return Ok(bytes.to_vec());
         }
+    }
+    // A complete installed face is cheaper and more useful for new characters
+    // than repairing another subset. Use the same resolver as font import.
+    if let Ok(bytes) = crate::system_fonts::load(name, text) {
+        return Ok(bytes);
     }
     // Serialize once for both recovery and other subsets of the exact face.
     if let Ok(pdf) = document.save_to_bytes() {

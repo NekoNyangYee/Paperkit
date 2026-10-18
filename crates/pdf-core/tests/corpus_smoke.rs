@@ -30,6 +30,432 @@ fn pdf(stream: &str, rotation: i32) -> Vec<u8> {
 
 #[test]
 #[ignore = "requires bundled Windows PDFium"]
+fn automatic_width_grows_multiline_text_until_the_page_edge() {
+    let resources =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/resources");
+    let engine = PreviewEngine::start(resources.join("pdfium/pdfium.dll")).unwrap();
+    for (case, left, fixed) in [
+        ("auto", 40, false),
+        ("prepend", 40, false),
+        ("fixed", 40, true),
+        ("edge", 500, false),
+    ] {
+        let path = std::env::temp_dir().join(format!(
+            "paperkit-auto-width-{case}-{}.pdf",
+            std::process::id()
+        ));
+        let original = pdf(&format!("BT /F1 12 Tf {left} 700 Td (Date: Friday) Tj ET\nBT /F1 12 Tf {left} 680 Td (Place: Hall) Tj ET\nBT /F1 12 Tf {left} 500 Td (BELOW) Tj ET\n"),0);
+        fs::write(&path, &original).unwrap();
+        let before = engine.render(case.into(), path.clone(), 0, 800).unwrap();
+        let group = before
+            .text
+            .groups
+            .iter()
+            .find(|g| g.can_flow && g.text.starts_with("Date:"))
+            .unwrap();
+        assert_eq!(group.bounds.len(), 2);
+        let width = group
+            .bounds
+            .iter()
+            .flatten()
+            .map(|p| p[0])
+            .fold(f32::NEG_INFINITY, f32::max)
+            - left as f32;
+        engine
+            .edit(
+                case.into(),
+                0,
+                EditAction::FlowBlock {
+                    page: 0,
+                    group: group.id,
+                    text: if case == "prepend" {
+                        format!("Additional information {}", group.text)
+                    } else {
+                        group
+                            .text
+                            .replace("Friday", "Friday registration and event details")
+                    },
+                    width: if fixed { Some(width) } else { None },
+                    height: None,
+                },
+            )
+            .unwrap();
+        let after = engine.render(case.into(), path.clone(), 0, 800).unwrap();
+        let rows: std::collections::BTreeSet<_> = after
+            .text
+            .objects
+            .iter()
+            .filter(|o| o.text.trim() != "BELOW")
+            .map(|o| (o.matrix[5] * 100.0).round() as i32)
+            .collect();
+        if case == "auto" || case == "prepend" {
+            assert_eq!(
+                rows.len(),
+                2,
+                "a multiline block must grow horizontally before wrapping"
+            );
+            assert!(after
+                .text
+                .objects
+                .iter()
+                .any(|o| o.text.contains(if case == "prepend" {
+                    "Additional information"
+                } else {
+                    "registration and event details"
+                }) && o.bounds.iter().any(|p| p[0] > left as f32 + width + 50.0)));
+            let old = before
+                .text
+                .objects
+                .iter()
+                .find(|o| o.text.trim() == "BELOW")
+                .unwrap();
+            let new = after
+                .text
+                .objects
+                .iter()
+                .find(|o| o.text.trim() == "BELOW")
+                .unwrap();
+            assert_eq!(old.matrix, new.matrix);
+            let old_place = before
+                .text
+                .objects
+                .iter()
+                .find(|o| o.text.trim() == "Place: Hall")
+                .unwrap();
+            let new_place = after
+                .text
+                .objects
+                .iter()
+                .find(|o| o.text.trim() == "Place: Hall")
+                .unwrap();
+            assert_eq!(
+                old_place.matrix, new_place.matrix,
+                "keep the original second row separate from inserted text"
+            );
+        } else {
+            assert!(rows.len() > 2, "fixed widths and the page edge still wrap");
+        }
+        assert!(after
+            .text
+            .objects
+            .iter()
+            .flat_map(|o| o.bounds)
+            .all(|p| p[0] <= 600.01));
+        let saved = path.with_extension("saved.pdf");
+        engine
+            .edit(
+                case.into(),
+                1,
+                EditAction::Save {
+                    path: saved.clone(),
+                },
+            )
+            .unwrap();
+        assert_eq!(
+            engine
+                .render(format!("{case}-saved"), saved.clone(), 0, 800)
+                .unwrap()
+                .png,
+            after.png
+        );
+        assert_eq!(fs::read(&path).unwrap(), original);
+        fs::remove_file(path).unwrap();
+        fs::remove_file(saved).unwrap();
+    }
+}
+
+#[test]
+#[ignore = "requires bundled Windows PDFium"]
+fn resizing_preserves_rows_indents_and_unchanged_shared_pages() {
+    let resources =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/resources");
+    let engine = PreviewEngine::start(resources.join("pdfium/pdfium.dll")).unwrap();
+    let mut document = lopdf::Document::load_mem(&pdf(
+        "BT /F1 12 Tf 40 700 Td (1. Question and choices) Tj ET\nBT /F1 12 Tf 44 682 Td (a. First answer has several words) Tj ET\nBT /F1 12 Tf 44 664 Td (b. Second answer has several words) Tj ET\nBT /F1 12 Tf 44 646 Td (c. Third answer has several words) Tj ET\nBT /F1 12 Tf 40 300 Td (KEEP) Tj ET\n",0)).unwrap();
+    let template = document.get_object((3, 0)).unwrap().clone();
+    let mut kids = vec![lopdf::Object::Reference((3, 0))];
+    for _ in 1..9 {
+        kids.push(document.add_object(template.clone()).into());
+    }
+    let root = document
+        .get_object_mut((2, 0))
+        .unwrap()
+        .as_dict_mut()
+        .unwrap();
+    root.set("Kids", kids);
+    root.set("Count", 9);
+    let mut original = Vec::new();
+    document.save_to(&mut original).unwrap();
+    let path = std::env::temp_dir().join(format!("paperkit-rows-{}.pdf", std::process::id()));
+    fs::write(&path, &original).unwrap();
+    let before = engine.render("rows".into(), path.clone(), 0, 800).unwrap();
+    let other = engine.render("rows".into(), path.clone(), 8, 800).unwrap();
+    let group = before
+        .text
+        .groups
+        .iter()
+        .find(|g| g.can_flow && g.text.starts_with("1.") && g.runs.len() == 4)
+        .unwrap();
+    let start = std::time::Instant::now();
+    engine
+        .edit(
+            "rows".into(),
+            0,
+            EditAction::FlowBlock {
+                page: 0,
+                group: group.id,
+                text: group.text.clone(),
+                width: Some(500.0),
+                height: Some(20.0),
+            },
+        )
+        .unwrap();
+    eprintln!("nine-page resize transaction: {:?}", start.elapsed());
+    let wide = engine.render("rows".into(), path.clone(), 0, 800).unwrap();
+    for run in &group.runs {
+        let old = before
+            .text
+            .objects
+            .iter()
+            .find(|o| o.id == run.object)
+            .unwrap();
+        let new = wide
+            .text
+            .objects
+            .iter()
+            .find(|o| o.text.trim() == old.text.trim())
+            .unwrap();
+        assert!((old.matrix[4] - new.matrix[4]).abs() < 0.01);
+        assert!((old.matrix[5] - new.matrix[5]).abs() < 0.01);
+    }
+    for i in 1..9 {
+        assert_eq!(
+            engine
+                .render("rows".into(), path.clone(), i, 800)
+                .unwrap()
+                .png,
+            other.png
+        );
+    }
+    engine.edit("rows".into(), 1, EditAction::Undo).unwrap();
+    engine
+        .edit(
+            "rows".into(),
+            2,
+            EditAction::FlowBlock {
+                page: 0,
+                group: group.id,
+                text: group.text.clone(),
+                width: Some(120.0),
+                height: None,
+            },
+        )
+        .unwrap();
+    let narrow = engine.render("rows".into(), path.clone(), 0, 800).unwrap();
+    assert!(narrow.text.objects.len() > wide.text.objects.len());
+    let old_bottom = before
+        .text
+        .objects
+        .iter()
+        .filter(|o| o.text.trim() != "KEEP")
+        .flat_map(|o| o.bounds)
+        .map(|p| p[1])
+        .fold(f32::INFINITY, f32::min);
+    let new_bottom = narrow
+        .text
+        .objects
+        .iter()
+        .filter(|o| o.text.trim() != "KEEP")
+        .flat_map(|o| o.bounds)
+        .map(|p| p[1])
+        .fold(f32::INFINITY, f32::min);
+    let old_keep = before
+        .text
+        .objects
+        .iter()
+        .find(|o| o.text.trim() == "KEEP")
+        .unwrap();
+    let new_keep = narrow
+        .text
+        .objects
+        .iter()
+        .find(|o| o.text.trim() == "KEEP")
+        .unwrap();
+    assert!((old_keep.matrix[5] - new_keep.matrix[5] - (old_bottom - new_bottom)).abs() < 0.02);
+    assert_eq!(
+        engine
+            .render("rows".into(), path.clone(), 8, 800)
+            .unwrap()
+            .png,
+        other.png
+    );
+    for marker in ["a.", "b.", "c."] {
+        let line = narrow
+            .text
+            .objects
+            .iter()
+            .find(|o| o.text.starts_with(marker))
+            .unwrap();
+        assert!((line.matrix[4] - 44.0).abs() < 0.01);
+    }
+    let saved = path.with_extension("saved.pdf");
+    engine
+        .edit(
+            "rows".into(),
+            3,
+            EditAction::Save {
+                path: saved.clone(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        engine.render("saved".into(), saved, 0, 800).unwrap().png,
+        narrow.png
+    );
+    assert_eq!(fs::read(path).unwrap(), original);
+}
+
+#[test]
+#[ignore = "requires bundled Windows PDFium"]
+fn clipboard_scaling_and_expanding_text_roundtrip() {
+    let resources =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/resources");
+    let engine = PreviewEngine::start(resources.join("pdfium/pdfium.dll")).unwrap();
+    let directory = std::env::temp_dir().join(format!("paperkit-flexible-{}", std::process::id()));
+    fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("source.pdf");
+    let original = pdf("q 1 0 0 1 10 10 cm BT /F1 20 Tf 30 690 Td (A) Tj ET Q\nBT /F1 20 Tf 40 500 Td (KEEP) Tj ET\n0.1 0.4 0.8 rg 300 400 60 40 re f\n", 0);
+    fs::write(&path, &original).unwrap();
+    let id = "flexible".to_owned();
+    let initial = engine.render(id.clone(), path.clone(), 0, 800).unwrap();
+    let text = &initial.text.objects[0];
+    engine
+        .edit(
+            id.clone(),
+            0,
+            EditAction::Replace {
+                page: 0,
+                object: text.id,
+                text: "A much longer editable text".into(),
+            },
+        )
+        .unwrap();
+    let expanded = engine.render(id.clone(), path.clone(), 0, 800).unwrap();
+    assert!(expanded.text.objects[0].bounds[1][0] > text.bounds[1][0] + 100.0);
+    assert_eq!(expanded.text.objects[1].text.trim(), "KEEP");
+    engine
+        .edit(
+            id.clone(),
+            1,
+            EditAction::ScaleText {
+                page: 0,
+                objects: vec![text.id],
+                sx: 1.2,
+                sy: 1.5,
+            },
+        )
+        .unwrap();
+    let scaled = engine.render(id.clone(), path.clone(), 0, 800).unwrap();
+    assert!((scaled.text.objects[0].matrix[0] - 1.2).abs() < 0.01);
+    assert!((scaled.text.objects[0].matrix[3] - 1.5).abs() < 0.01);
+    let graphic = scaled
+        .text
+        .graphics
+        .iter()
+        .find(|g| g.kind == "path")
+        .unwrap();
+    let clipboard = engine.copy_graphic(id.clone(), 2, 0, graphic.id).unwrap();
+    assert_eq!(
+        engine.render(id.clone(), path.clone(), 0, 800).unwrap().png,
+        scaled.png
+    );
+    engine
+        .edit(
+            id.clone(),
+            2,
+            EditAction::PasteGraphic {
+                page: 0,
+                source: clipboard.clone(),
+            },
+        )
+        .unwrap();
+    let pasted = engine.render(id.clone(), path.clone(), 0, 800).unwrap();
+    assert_eq!(pasted.text.graphics.len(), scaled.text.graphics.len() + 1);
+    engine.edit(id.clone(), 3, EditAction::Undo).unwrap();
+    assert_eq!(
+        engine.render(id.clone(), path.clone(), 0, 800).unwrap().png,
+        scaled.png
+    );
+    engine.edit(id.clone(), 4, EditAction::Redo).unwrap();
+    assert_eq!(
+        engine.render(id.clone(), path.clone(), 0, 800).unwrap().png,
+        pasted.png
+    );
+    let mut png = Vec::new();
+    {
+        let mut encoder = png::Encoder::new(&mut png, 2, 2);
+        encoder.set_color(png::ColorType::Rgba);
+        encoder.set_depth(png::BitDepth::Eight);
+        encoder
+            .write_header()
+            .unwrap()
+            .write_image_data(&[255, 0, 0, 255, 0, 255, 0, 128, 0, 0, 255, 255, 0, 0, 0, 0])
+            .unwrap();
+    }
+    engine
+        .edit(id.clone(), 5, EditAction::PasteImage { page: 0, png })
+        .unwrap();
+    let with_image = engine.render(id.clone(), path.clone(), 0, 800).unwrap();
+    assert!(with_image.text.graphics.iter().any(|g| g.kind == "image"));
+    // A copied snapshot remains usable after edits, including on another page.
+    engine
+        .edit(
+            id.clone(),
+            6,
+            EditAction::Page {
+                page: 0,
+                operation: pdf_core::pages::PageOperation::Duplicate,
+                destination: None,
+            },
+        )
+        .unwrap();
+    engine
+        .edit(
+            id.clone(),
+            7,
+            EditAction::PasteGraphic {
+                page: 1,
+                source: clipboard,
+            },
+        )
+        .unwrap();
+    let second = engine.render(id.clone(), path.clone(), 1, 800).unwrap();
+    assert_eq!(
+        second.text.graphics.len(),
+        with_image.text.graphics.len() + 1
+    );
+    let output = directory.join("saved.pdf");
+    engine
+        .edit(
+            id,
+            8,
+            EditAction::Save {
+                path: output.clone(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        engine
+            .render("reopened".into(), output, 1, 800)
+            .unwrap()
+            .png,
+        second.png
+    );
+    assert_eq!(fs::read(path).unwrap(), original);
+}
+
+#[test]
+#[ignore = "requires bundled Windows PDFium"]
 fn page_operations_preserve_content_history_and_saved_order() {
     use lopdf::{Dictionary, Object, Stream};
     use pdf_core::pages::PageOperation;
@@ -1736,12 +2162,12 @@ fn columns_cells_paragraphs_move_edit_save_and_reopen() {
 
 #[test]
 #[ignore = "requires bundled Windows PDFium"]
-fn reflow_does_not_overwrite_a_neighbouring_paragraph() {
+fn expanding_blocks_push_headings_lists_and_graphics_in_one_undo_step() {
     let resources =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/resources");
     let engine = PreviewEngine::start(resources.join("pdfium/pdfium.dll")).unwrap();
     let path = std::env::temp_dir().join(format!("paperkit-collision-{}.pdf", std::process::id()));
-    let original = pdf("BT /F1 12 Tf 40 700 Td (Original) Tj ET\nBT /F1 12 Tf 40 650 Td (KEEP THIS PARAGRAPH) Tj ET\n",0);
+    let original = pdf("q 0.2 0.5 0.9 rg 40 540 140 30 re f Q\nBT /F1 12 Tf 40 750 Td (HEADER) Tj ET\nBT /F1 12 Tf 40 700 Td (Original) Tj ET\nBT /F1 12 Tf 0.2 Tc 1.5 Tw 40 650 Td (2. Topic heading) Tj ET\nBT /F1 12 Tf 0 Tc 0 Tw 55 620 Td (Strategy pattern) Tj ET\nBT /F1 12 Tf 55 600 Td (State pattern) Tj ET\nBT /F1 12 Tf 360 650 Td (OTHER COLUMN) Tj ET\n",0);
     fs::write(&path, &original).unwrap();
     let before = engine
         .render("collision".into(), path.clone(), 0, 800)
@@ -1752,10 +2178,145 @@ fn reflow_does_not_overwrite_a_neighbouring_paragraph() {
         .iter()
         .find(|g| g.kind == GroupKind::Paragraph && g.text == "Original")
         .unwrap();
+    assert!(group
+        .following_objects
+        .contains(&before.text.graphics[0].id));
+    assert_eq!(group.following_objects.len(), 4);
+    engine
+        .edit(
+            "collision".into(),
+            0,
+            EditAction::FlowBlock {
+                page: 0,
+                group: group.id,
+                text: "First\nSecond\nThird\nFourth".into(),
+                width: None,
+                height: Some(1.0),
+            },
+        )
+        .unwrap();
+    let after = engine
+        .render("collision".into(), path.clone(), 0, 800)
+        .unwrap();
+    let last = after
+        .text
+        .objects
+        .iter()
+        .find(|o| o.text.trim() == "Fourth")
+        .unwrap();
+    let first = before
+        .text
+        .objects
+        .iter()
+        .find(|o| o.text.trim() == "Original")
+        .unwrap();
+    let growth = first
+        .bounds
+        .iter()
+        .map(|p| p[1])
+        .fold(f32::INFINITY, f32::min)
+        - last
+            .bounds
+            .iter()
+            .map(|p| p[1])
+            .fold(f32::INFINITY, f32::min);
+    assert!(growth > 45.0);
+    for old in before.text.objects.iter().filter(|o| o.id != first.id) {
+        let new = after
+            .text
+            .objects
+            .iter()
+            .find(|o| o.text.trim() == old.text.trim())
+            .unwrap();
+        let shift = if group.following_objects.contains(&old.id) {
+            growth
+        } else {
+            0.0
+        };
+        assert_eq!(new.font, old.font);
+        assert_eq!(new.color, old.color);
+        assert_eq!(new.font_size, old.font_size);
+        assert_eq!(&new.matrix[..5], &old.matrix[..5]);
+        assert!((new.matrix[5] - old.matrix[5] + shift).abs() < 0.02);
+        for (a, b) in old.bounds.iter().zip(new.bounds) {
+            assert!((a[0] - b[0]).abs() < 0.02 && (a[1] - shift - b[1]).abs() < 0.02);
+        }
+    }
+    for (a, b) in before.text.graphics[0]
+        .bounds
+        .iter()
+        .zip(after.text.graphics[0].bounds)
+    {
+        assert!((a[0] - b[0]).abs() < 0.02 && (a[1] - growth - b[1]).abs() < 0.02);
+    }
+    engine
+        .edit("collision".into(), 1, EditAction::Undo)
+        .unwrap();
+    assert_eq!(
+        engine
+            .render("collision".into(), path.clone(), 0, 800)
+            .unwrap()
+            .png,
+        before.png
+    );
+    engine
+        .edit("collision".into(), 2, EditAction::Redo)
+        .unwrap();
+    assert_eq!(
+        engine
+            .render("collision".into(), path.clone(), 0, 800)
+            .unwrap()
+            .png,
+        after.png
+    );
+    let saved = path.with_extension("saved.pdf");
+    engine
+        .edit(
+            "collision".into(),
+            3,
+            EditAction::Save {
+                path: saved.clone(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        engine
+            .render("reopened".into(), saved.clone(), 0, 800)
+            .unwrap()
+            .png,
+        after.png
+    );
+    fs::remove_file(saved).unwrap();
+    assert_eq!(fs::read(&path).unwrap(), original);
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+#[ignore = "requires bundled Windows PDFium"]
+fn growing_past_the_page_keeps_the_entire_document_and_history_unchanged() {
+    let resources =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/resources");
+    let engine = PreviewEngine::start(resources.join("pdfium/pdfium.dll")).unwrap();
+    let path =
+        std::env::temp_dir().join(format!("paperkit-flow-overflow-{}.pdf", std::process::id()));
+    let original = pdf(
+        "BT /F1 12 Tf 40 700 Td (Original) Tj ET\nBT /F1 12 Tf 40 40 Td (Last paragraph) Tj ET\n",
+        0,
+    );
+    fs::write(&path, &original).unwrap();
+    let before = engine
+        .render("overflow".into(), path.clone(), 0, 800)
+        .unwrap();
+    let group = before
+        .text
+        .groups
+        .iter()
+        .find(|g| g.can_flow && g.text == "Original")
+        .unwrap();
     assert_eq!(
         engine
             .edit(
-                "collision".into(),
+                "overflow".into(),
                 0,
                 EditAction::FlowBlock {
                     page: 0,
@@ -1766,17 +2327,166 @@ fn reflow_does_not_overwrite_a_neighbouring_paragraph() {
                 }
             )
             .unwrap_err(),
-        PreviewError::TextOverflow
+        PreviewError::FollowingContentOverflow
     );
+    let after = engine
+        .render("overflow".into(), path.clone(), 0, 800)
+        .unwrap();
+    assert_eq!(before.png, after.png);
+    assert_eq!(after.state.revision, 0);
+    assert!(!after.state.can_undo && !after.state.dirty);
+    engine
+        .edit(
+            "overflow".into(),
+            0,
+            EditAction::FlowBlock {
+                page: 0,
+                group: group.id,
+                text: "Safe".into(),
+                width: None,
+                height: None,
+            },
+        )
+        .unwrap();
+    assert_eq!(fs::read(&path).unwrap(), original);
+    fs::remove_file(path).unwrap();
+}
+
+#[test]
+#[ignore = "requires bundled Windows PDFium"]
+fn growing_keeps_original_rows_stroke_widths_and_fixed_page_numbers() {
+    let resources =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/resources");
+    let engine = PreviewEngine::start(resources.join("pdfium/pdfium.dll")).unwrap();
+    let path =
+        std::env::temp_dir().join(format!("paperkit-source-rows-{}.pdf", std::process::id()));
+    let original = pdf("q 0.5 0 0 -0.5001 0 800 cm BT /F1 30 Tf 2 Tr 1.6 w 1 0 0 -1 80 90 Tm (HEADER) Tj ET Q\nBT /F1 12 Tf -1 Tc 40 700 Td (Original long first row) Tj ET\nBT /F1 12 Tf -1 Tc 40 680 Td (Original long second row) Tj ET\nq 0.5 0 0 -0.5001 0 800 cm BT /F1 24 Tf 2 Tr 1.6 w 1 0 0 -1 80 320 Tm (2. Heading) Tj ET Q\nBT /F1 12 Tf 0 Tc 55 600 Td (Strategy pattern) Tj ET\nBT /F1 12 Tf 40 160 Td (Last paragraph) Tj ET\nBT /F1 10 Tf 280 40 Td (- 1 -) Tj ET\n",0);
+    fs::write(&path, &original).unwrap();
+    let before = engine
+        .render("source-rows".into(), path.clone(), 0, 800)
+        .unwrap();
+    let group = before
+        .text
+        .groups
+        .iter()
+        .find(|g| g.can_flow && g.text.starts_with("Original"))
+        .unwrap();
+    assert_eq!(group.bounds.len(), 2);
+    let footer = before
+        .text
+        .objects
+        .iter()
+        .find(|o| o.text.trim() == "- 1 -")
+        .unwrap();
+    assert!(!group.following_objects.contains(&footer.id));
+    engine
+        .edit(
+            "source-rows".into(),
+            0,
+            EditAction::FlowBlock {
+                page: 0,
+                group: group.id,
+                text: format!("{}\nAdded\nAdded", group.text),
+                width: None,
+                height: None,
+            },
+        )
+        .unwrap();
+    let after = engine
+        .render("source-rows".into(), path.clone(), 0, 800)
+        .unwrap();
+    for old in before
+        .text
+        .objects
+        .iter()
+        .filter(|o| o.text.trim().starts_with("Original") || o.id == footer.id)
+    {
+        let new = after
+            .text
+            .objects
+            .iter()
+            .find(|o| o.text.trim() == old.text.trim())
+            .unwrap();
+        assert_eq!(old.matrix, new.matrix);
+        for (p, q) in old.bounds.iter().zip(new.bounds) {
+            assert!((p[0] - q[0]).abs() < 0.01 && (p[1] - q[1]).abs() < 0.01);
+        }
+    }
+    let old_heading = before
+        .text
+        .objects
+        .iter()
+        .find(|o| o.text.trim() == "2. Heading")
+        .unwrap();
+    let new_heading = after
+        .text
+        .objects
+        .iter()
+        .find(|o| o.text.trim() == "2. Heading")
+        .unwrap();
+    assert!(old_heading.matrix[5] - new_heading.matrix[5] > 35.0);
+    let again = after
+        .text
+        .groups
+        .iter()
+        .find(|g| g.can_flow && g.text.starts_with("Original"))
+        .unwrap();
+    engine
+        .edit(
+            "source-rows".into(),
+            1,
+            EditAction::FlowBlock {
+                page: 0,
+                group: again.id,
+                text: format!("{}\nAdded", again.text),
+                width: None,
+                height: None,
+            },
+        )
+        .unwrap();
+    let twice = engine
+        .render("source-rows".into(), path.clone(), 0, 800)
+        .unwrap();
+    engine
+        .edit("source-rows".into(), 2, EditAction::Undo)
+        .unwrap();
     assert_eq!(
         engine
-            .render("collision".into(), path.clone(), 0, 800)
+            .render("source-rows".into(), path.clone(), 0, 800)
             .unwrap()
             .png,
-        before.png
+        after.png
+    );
+    engine
+        .edit("source-rows".into(), 3, EditAction::Redo)
+        .unwrap();
+    assert_eq!(
+        engine
+            .render("source-rows".into(), path.clone(), 0, 800)
+            .unwrap()
+            .png,
+        twice.png
+    );
+    let saved = path.with_extension("saved.pdf");
+    engine
+        .edit(
+            "source-rows".into(),
+            4,
+            EditAction::Save {
+                path: saved.clone(),
+            },
+        )
+        .unwrap();
+    assert_eq!(
+        engine
+            .render("source-rows-saved".into(), saved.clone(), 0, 800)
+            .unwrap()
+            .png,
+        twice.png
     );
     assert_eq!(fs::read(&path).unwrap(), original);
     fs::remove_file(path).unwrap();
+    fs::remove_file(saved).unwrap();
 }
 
 #[test]

@@ -146,12 +146,30 @@ export function TextPage({
   useEffect(() => {
     if (!disabled && !drag.current && !iconDrag.current) resetMove();
   }, [disabled]);
-  const resize = useRef<{ x: number; y: number; width: number; height: number } | null>(null);
+  const resize = useRef<{
+    x: number;
+    y: number;
+    width: number;
+    height: number;
+    ratio: number;
+    axis: "both" | "x" | "y";
+  } | null>(null);
   const [background, setBackground] = useState<string | null>(null);
   const [backgroundError, setBackgroundError] = useState<string | null>(null);
   const [prepareAttempt, setPrepareAttempt] = useState(0);
   const [fontsReady, setFontsReady] = useState<string | null>(null);
   const [preparedSelection, setPreparedSelection] = useState<string | null>(null);
+  const [flowLayers, setFlowLayers] = useState<{
+    key: string;
+    background: string;
+    foreground: string;
+  } | null>(null);
+  const [growth, setGrowth] = useState(0);
+  const [editorSize, setEditorSize] = useState<{
+    key: string;
+    width: number;
+    height: number;
+  } | null>(null);
   const selectionKey = `${page.fileId}:${page.state.revision}:${page.pageIndex}:${selected?.group?.kind ?? "object"}:${selected?.id}:${JSON.stringify(selected?.group?.runs ?? [])}`;
   const completeSelection =
     !!selected &&
@@ -164,11 +182,54 @@ export function TextPage({
               .length,
       ));
   const fontReadyKey = `${selectionKey}:${page.width}:${prepareAttempt}:${fontGeneration}`;
+  const following = selected?.group?.canFlow ? (selected.group.followingObjects ?? []) : [];
+  const flowKey = `${selectionKey}:${page.width}:${prepareAttempt}`;
+  const flowing = inlineEditing && following.length > 0;
+  const flowReady = !flowing || flowLayers?.key === flowKey;
   const ready =
     typeof FontFace === "undefined" ||
     (preparedSelection === selectionKey &&
       fontsReady === fontReadyKey &&
+      flowReady &&
       (!completeSelection || background !== null));
+  useEffect(() => {
+    setGrowth(0);
+  }, [selectionKey, inlineEditing]);
+  useEffect(() => {
+    let active = true;
+    if (!flowing || flowLayers?.key === flowKey) return;
+    const selectedIds = selected?.group?.runs.map((r) => r.object) ?? [];
+    const args = {
+      fileId: page.fileId,
+      revision: page.state.revision,
+      pageIndex: page.pageIndex,
+      width: page.width,
+    };
+    void (async () => {
+      try {
+        const background = await decodedLayer(
+          await invoke<string>("editing_background", {
+            ...args,
+            objects: [...new Set([...selectedIds, ...following])],
+          }),
+        );
+        if (!active) return;
+        const foreground = await decodedLayer(
+          await invoke<string>("editing_background", {
+            ...args,
+            objects: following,
+            foreground: true,
+          }),
+        );
+        if (active) setFlowLayers({ key: flowKey, background, foreground });
+      } catch (error) {
+        if (active) setBackgroundError(`문단 배치 미리보기 준비 실패: ${String(error)}`);
+      }
+    })();
+    return () => {
+      active = false;
+    };
+  }, [flowing, flowKey]);
   useEffect(() => {
     setBackground(null);
     setForeground(null);
@@ -231,8 +292,20 @@ export function TextPage({
     ? Math.max(...selected.bounds.map((p) => p[1])) - Math.min(...selected.bounds.map((p) => p[1]))
     : 0;
   const scale = pdfHeight > 0 ? (Math.max(...ys) - Math.min(...ys)) / pdfHeight : 1;
-  const width = blockSize ? blockSize.width * scale : originalWidth;
-  const height = blockSize ? blockSize.height * scale : originalHeight;
+  const autoWidth = !!selected?.group?.canFlow && blockSize === null;
+  const measured = inlineEditing && editorSize?.key === fontReadyKey ? editorSize : null;
+  const width =
+    autoWidth && measured
+      ? Math.min(page.width - left, Math.max(originalWidth, measured.width))
+      : blockSize
+        ? blockSize.width * scale
+        : originalWidth;
+  const height =
+    inlineEditing && measured
+      ? Math.max(originalHeight, blockSize ? blockSize.height * scale : 0, measured.height)
+      : blockSize
+        ? blockSize.height * scale
+        : originalHeight;
   const groups = mode === "object" ? [] : (page.text.groups ?? []).filter((g) => g.kind === mode);
   const groupedObjects = new Set(groups.flatMap((g) => g.runs.map((r) => r.object)));
   const targets: TextSelection[] = [
@@ -304,18 +377,39 @@ export function TextPage({
       <img
         draggable={false}
         className="pointer-events-none block max-w-none"
-        src={moving || (inlineEditing && ready && background) ? background! : page.imageUrl}
+        src={
+          flowing && ready && flowLayers?.key === flowKey
+            ? flowLayers.background
+            : moving || (inlineEditing && ready && background)
+              ? background!
+              : page.imageUrl
+        }
         width={page.width}
         height={page.height}
         alt={`${name} · ${page.pageIndex + 1}페이지`}
       />
+      {flowing && ready && flowLayers?.key === flowKey && (
+        <img
+          data-testid="flowing-content"
+          aria-hidden="true"
+          src={flowLayers.foreground}
+          width={page.width}
+          height={page.height}
+          className="pointer-events-none absolute left-0 top-0 z-[5] max-w-none"
+          style={{ transform: `translateY(${growth}px)` }}
+        />
+      )}
       {editingEnabled && !inlineEditing && onGraphicEdit && (
         <GraphicLayer
           graphicMode={mode === "graphic"}
           textSelected={!!selected}
           key={`${page.fileId}:${page.pageIndex}:${page.state.revision}`}
           page={page}
-          disabled={disabled}
+          disabled={
+            disabled ||
+            (!!selected &&
+              (draft !== selected.text || blockSize !== null || selected.alignment !== undefined))
+          }
           onEdit={onGraphicEdit}
           onSelect={() => onSelect(null)}
         />
@@ -623,16 +717,19 @@ export function TextPage({
       )}
       {editingEnabled && selected && editorSelection && inlineEditing && (
         <div
-          className={`absolute z-10 ${completeSelection ? "bg-transparent" : "bg-white"}`}
+          className={`absolute z-10 outline outline-1 outline-emerald-600 ${completeSelection ? "bg-transparent" : "bg-white"}`}
           data-testid="inline-block"
           style={{
             left,
             top,
             width:
-              blockSize || (selected.group?.bounds.length ?? 0) > 1 || selected.alignment
+              autoWidth ||
+              blockSize ||
+              (selected.group?.bounds.length ?? 0) > 1 ||
+              selected.alignment
                 ? width
                 : page.width - left,
-            minHeight: height,
+            minHeight: blockSize ? blockSize.height * scale : originalHeight,
             visibility: ready ? "visible" : "hidden",
           }}
         >
@@ -650,6 +747,19 @@ export function TextPage({
             visible={ready}
             onFontsReady={() => setFontsReady(fontReadyKey)}
             onFontError={setBackgroundError}
+            onGrowth={setGrowth}
+            autoWidth={
+              autoWidth ? { minimum: originalWidth, maximum: page.width - left } : undefined
+            }
+            onLayout={(size) =>
+              setEditorSize((previous) =>
+                previous?.key === fontReadyKey &&
+                Math.abs(previous.width - size.width) < 0.1 &&
+                Math.abs(previous.height - size.height) < 0.1
+                  ? previous
+                  : { key: fontReadyKey, ...size },
+              )
+            }
             disabled={disabled}
             point={point.current}
             onDraft={onDraft}
@@ -772,48 +882,77 @@ export function TextPage({
           </button>
         </div>
       )}
-      {editingEnabled && !inlineEditing && selected?.group?.canFlow && (
-        <button
-          aria-label="블록 크기 조절"
-          disabled={disabled}
-          className="absolute z-20 h-3 w-3 cursor-nwse-resize rounded-sm border border-white bg-emerald-600"
-          style={{ left: left + width - 6, top: top + height - 6, touchAction: "none" }}
-          onPointerDown={(event) => {
-            event.stopPropagation();
-            event.preventDefault();
-            event.currentTarget.setPointerCapture(event.pointerId);
-            resize.current = {
-              x: event.clientX,
-              y: event.clientY,
-              width: width / scale,
-              height: height / scale,
-            };
-          }}
-          onPointerMove={(event) => {
-            const r = resize.current;
-            if (r)
-              onResize({
-                width: Math.max(
-                  12,
-                  Math.min((page.width - left) / scale, r.width + (event.clientX - r.x) / scale),
-                ),
-                height: Math.max(
-                  12,
-                  Math.min((page.height - top) / scale, r.height + (event.clientY - r.y) / scale),
-                ),
-              });
-          }}
-          onPointerUp={() => {
-            resize.current = null;
-          }}
-          onPointerCancel={() => {
-            resize.current = null;
-          }}
-          onLostPointerCapture={() => {
-            resize.current = null;
-          }}
-        />
-      )}
+      {editingEnabled &&
+        selected?.group?.canFlow &&
+        (["both", "x", "y"] as const).map((axis) => (
+          <button
+            key={axis}
+            aria-label={
+              axis === "both"
+                ? "블록 크기 조절"
+                : axis === "x"
+                  ? "블록 가로 조절"
+                  : "블록 세로 조절"
+            }
+            disabled={disabled}
+            className={`absolute z-20 h-3 w-3 rounded-sm border border-white bg-emerald-600 ${axis === "x" ? "cursor-ew-resize" : axis === "y" ? "cursor-ns-resize" : "cursor-nwse-resize"}`}
+            style={{
+              left: left + width * (axis === "y" ? 0.5 : 1) - 6,
+              top: top + height * (axis === "x" ? 0.5 : 1) - 6,
+              touchAction: "none",
+            }}
+            onPointerDown={(event) => {
+              event.stopPropagation();
+              event.preventDefault();
+              event.currentTarget.setPointerCapture(event.pointerId);
+              resize.current = {
+                x: event.clientX,
+                y: event.clientY,
+                width: width / scale,
+                height: height / scale,
+                ratio:
+                  (event.currentTarget.parentElement?.getBoundingClientRect().width || page.width) /
+                  page.width,
+                axis,
+              };
+            }}
+            onPointerMove={(event) => {
+              const r = resize.current;
+              if (r)
+                onResize({
+                  width:
+                    r.axis === "y"
+                      ? r.width
+                      : Math.max(
+                          12,
+                          Math.min(
+                            (page.width - left) / scale,
+                            r.width + (event.clientX - r.x) / (scale * r.ratio),
+                          ),
+                        ),
+                  height:
+                    r.axis === "x"
+                      ? r.height
+                      : Math.max(
+                          12,
+                          Math.min(
+                            (page.height - top) / scale,
+                            r.height + (event.clientY - r.y) / (scale * r.ratio),
+                          ),
+                        ),
+                });
+            }}
+            onPointerUp={() => {
+              resize.current = null;
+            }}
+            onPointerCancel={() => {
+              resize.current = null;
+            }}
+            onLostPointerCapture={() => {
+              resize.current = null;
+            }}
+          />
+        ))}
     </div>
   );
 }

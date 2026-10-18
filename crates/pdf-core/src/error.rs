@@ -17,6 +17,7 @@ pub enum EngineError {
     UnsupportedText,
     TextOverflow,
     PageOverflow,
+    FollowingContentOverflow,
     VerificationFailed,
     ChangedTextMismatch,
     OutsideEditModified,

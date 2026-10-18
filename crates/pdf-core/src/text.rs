@@ -37,7 +37,7 @@ pub struct GraphicObject {
     pub screen_bounds: [[i32; 2]; 4],
 }
 
-fn extract_graphics(page: &PdfPage<'_>, config: &PdfRenderConfig) -> Vec<GraphicObject> {
+pub(crate) fn extract_graphics(page: &PdfPage<'_>, config: &PdfRenderConfig) -> Vec<GraphicObject> {
     page.objects()
         .iter()
         .enumerate()
@@ -167,7 +167,9 @@ fn extract_impl(
             let font = text.font();
             let name = font.name();
             let value = text_page.for_object(text);
-            let reusable_font = if prepare_fonts {
+            let builtin_ascii =
+                standard_font(&name) && value.is_ascii() && !font.is_embedded().unwrap_or(true);
+            let reusable_font = if prepare_fonts && !builtin_ascii {
                 let cached_font = font_bytes.entry(font.token()).or_insert_with(|| {
                     crate::fonts::preserved_bytes(document, &font, value.trim_end()).ok()
                 });
@@ -182,18 +184,15 @@ fn extract_impl(
                 });
                 reusable
             } else {
-                true
+                !prepare_fonts
             };
             let edit_blocked = if !can_modify {
                 Some("권한 제한 또는 전자 서명이 있는 문서는 수정할 수 없습니다.")
             } else if !reusable_font
-                && !crate::fonts::known_name(&name)
                 && (font.is_embedded().unwrap_or(true) || !standard_font(&name))
             {
                 Some("PDF 내장 글꼴의 문자 매핑을 복원하지 못했고, 동일한 전체 글꼴도 찾지 못했습니다. 원본 글꼴 데이터가 필요합니다.")
-            } else if (!reusable_font && !crate::fonts::known_name(&name) && !value.is_ascii())
-                || value.is_empty()
-            {
+            } else if (!reusable_font && !value.is_ascii()) || value.is_empty() {
                 Some("현재 편집은 기본 폰트의 영문·숫자·기호만 지원합니다.")
             } else if m.b().abs() > 0.001
                 || m.c().abs() > 0.001

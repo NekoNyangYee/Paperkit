@@ -23,6 +23,7 @@ pub struct SourceRun {
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct TextGroup {
+    pub following_objects: Vec<usize>,
     pub can_flow: bool,
     pub can_reflow: bool,
     pub can_change_font: bool,
@@ -223,6 +224,42 @@ pub(crate) fn reconstruct(page: &PdfPage<'_>, config: &PdfRenderConfig, result: 
             }
             group.screen_bounds.push(screen);
         }
+    }
+    let fixed = page
+        .boundaries()
+        .crop()
+        .or_else(|_| page.boundaries().media())
+        .ok()
+        .map(|b| {
+            crate::flow_followers::pagination(
+                result,
+                [
+                    b.bounds.left().value,
+                    b.bounds.bottom().value,
+                    b.bounds.right().value,
+                    b.bounds.top().value,
+                ],
+            )
+            .0
+        })
+        .unwrap_or_default();
+    let planner = crate::flow_followers::Planner::new(result).excluding(&fixed);
+    let following: Vec<_> = result
+        .groups
+        .iter()
+        .map(|group| {
+            if group.can_flow {
+                planner
+                    .find(&group.runs.iter().map(|r| r.object).collect())
+                    .into_iter()
+                    .collect()
+            } else {
+                Vec::new()
+            }
+        })
+        .collect();
+    for (group, ids) in result.groups.iter_mut().zip(following) {
+        group.following_objects = ids;
     }
 }
 
@@ -555,6 +592,7 @@ fn push_group(
             })
     };
     groups.push(TextGroup {
+        following_objects: Vec::new(),
         can_flow: false,
         can_reflow: false,
         can_change_font: false,

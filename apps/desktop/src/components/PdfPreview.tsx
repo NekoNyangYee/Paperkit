@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { isTauri, invoke } from "@tauri-apps/api/core";
 import { save, open } from "@tauri-apps/plugin-dialog";
@@ -23,6 +23,8 @@ import {
   FolderOpen,
   Type,
   FileText,
+  ImagePlus,
+  ClipboardPaste,
 } from "lucide-react";
 import { IconButton } from "./ui/icon-button";
 import { registerExitGuard } from "../lib/app-exit";
@@ -43,6 +45,12 @@ import { useAppStore } from "../stores/app-store";
 import { PageSidebar, type ThumbnailChange } from "./PageSidebar";
 import { ZoomSurface } from "./ZoomSurface";
 import { TextPage } from "./TextPage";
+import { SizeControls } from "./SizeControls";
+import {
+  clipboardImage,
+  readGraphicClipboard,
+  type GraphicContent,
+} from "../lib/graphic-clipboard";
 import { editorFont, clearOriginalFonts } from "../lib/editor-font";
 import { textBySource, fallbackCandidates } from "../lib/font-matching";
 import { selectionStyle, weightLabel } from "../lib/font-style";
@@ -63,6 +71,7 @@ export function PdfPreview({ file }: { file: FileInfo }) {
     isOpen: discardOpen,
   } = useDiscardDialog();
   const pageArea = useRef<HTMLElement>(null);
+  const imageInput = useRef<HTMLInputElement>(null);
   const [pageIndex, setPageIndex] = useState(0);
   const [pageInput, setPageInput] = useState("1");
   const [pageInputError, setPageInputError] = useState<string | null>(null);
@@ -115,7 +124,29 @@ export function PdfPreview({ file }: { file: FileInfo }) {
   const selectionError = useAppStore((state) => state.error);
   const clearing = useAppStore((state) => state.phase === "clearing");
 
-  const detectedStyle = selectionStyle(selected, page?.text.objects ?? [], fonts);
+  const detectedStyle = useMemo(
+    () => selectionStyle(selected, page?.text.objects ?? [], fonts),
+    [selected, page?.text.objects, fonts],
+  );
+  const fontChoices = useMemo(
+    () => ({
+      bundled: fonts
+        .filter((font) => font.source !== "installed")
+        .map((font) => (
+          <option key={font.id} value={font.id}>
+            {font.name}
+          </option>
+        )),
+      installed: fonts
+        .filter((font) => font.source === "installed")
+        .map((font) => (
+          <option key={font.id} value={font.id}>
+            {font.name}
+          </option>
+        )),
+    }),
+    [fonts],
+  );
   const styleDisabled =
     busy ||
     loading ||
@@ -156,16 +187,22 @@ export function PdfPreview({ file }: { file: FileInfo }) {
 
   async function validateDraftFont(target: TextSelection, value: string) {
     if (!value.trim()) return;
+    const byFont = new Map<number, { font: string; text: string }>();
     for (const [id, text] of textBySource(target, value)) {
       const source = page!.text.objects.find((o) => o.id === id)!;
-      if (/^(Helvetica|Courier|Times)(-|$)/.test(source.font) && /^[\x20-\x7e]*$/.test(text))
-        continue;
+      const face = source.fontObjectId ?? source.id;
+      const existing = byFont.get(face);
+      byFont.set(face, { font: source.font, text: (existing?.text ?? "") + text });
+    }
+    for (const [id, { font, text }] of byFont) {
+      if (/^(Helvetica|Courier|Times)(-|$)/.test(font) && /^[\x20-\x7e]*$/.test(text)) continue;
       const data = await invoke("document_font", {
         fileId: file.id,
         revision: editState.revision,
         pageIndex,
         objectId: id,
         text,
+        validateOnly: true,
       });
       if (typeof data !== "string") throw new Error("글꼴 검증 응답이 올바르지 않습니다.");
     }
@@ -173,7 +210,8 @@ export function PdfPreview({ file }: { file: FileInfo }) {
 
   useEffect(() => {
     setFontWarning(null);
-    if (!inlineEditing || !unsavedDraft || !selected || busy || loading || fontResolution) return;
+    if (!inlineEditing || !selected || draft === selected.text || busy || loading || fontResolution)
+      return;
     if (!(selected.group?.canFlow || (!selected.group && selected.fontChangeBlocked === null)))
       return;
     let active = true;
@@ -480,6 +518,7 @@ export function PdfPreview({ file }: { file: FileInfo }) {
             pageIndex,
             objectId: source.id,
             text: source.text.trimEnd(),
+            validateOnly: true,
           });
           if (typeof data !== "string") throw new Error(source.editBlocked);
         }
@@ -668,7 +707,10 @@ export function PdfPreview({ file }: { file: FileInfo }) {
     }
     if (composing.current) return null;
     if (working.current) return null;
-    if (selected.group?.canFlow || (!selected.group && selected.fontChangeBlocked === null)) {
+    if (
+      value !== selected.text &&
+      (selected.group?.canFlow || (!selected.group && selected.fontChangeBlocked === null))
+    ) {
       // Check newly typed characters too: a subset can display the old text yet lack new glyphs.
       working.current = true;
       setBusy(true);
@@ -736,6 +778,25 @@ export function PdfPreview({ file }: { file: FileInfo }) {
           }
         : { kind: "replace", page: pageIndex, object: selected.id, text: value },
     );
+  }
+
+  async function insertGraphic(read: () => Promise<GraphicContent>) {
+    if (working.current || !page || !editingEnabled || loading || preparingEdit) return;
+    const committed = await commitDraft();
+    if (!committed || working.current) return;
+    working.current = true;
+    setBusy(true);
+    setEditError(null);
+    try {
+      const content = await read();
+      working.current = false;
+      await run({ ...content, page: pageIndex }, committed.revision);
+    } catch (cause) {
+      setEditError(errorMessage(cause));
+    } finally {
+      working.current = false;
+      setBusy(false);
+    }
   }
 
   async function saveAs() {
@@ -1065,6 +1126,49 @@ export function PdfPreview({ file }: { file: FileInfo }) {
               <span className="ribbon-caption">작업 기록</span>
             </div>
             <div className="ribbon-group">
+              <input
+                ref={imageInput}
+                type="file"
+                accept="image/png,image/jpeg,image/webp,image/bmp,image/gif"
+                aria-label="삽입할 이미지 파일"
+                className="hidden"
+                tabIndex={-1}
+                onChange={(event) => {
+                  const image = event.currentTarget.files?.[0];
+                  event.currentTarget.value = "";
+                  if (image)
+                    void insertGraphic(async () => ({
+                      kind: "pasteImage",
+                      png: await clipboardImage(image),
+                    }));
+                }}
+              />
+              <div className="flex flex-1 items-center gap-1">
+                <button
+                  type="button"
+                  className="ribbon-command"
+                  disabled={busy || loading || preparingEdit || !page}
+                  title="이미지 파일 선택 (PNG, JPG, WEBP, BMP, GIF)"
+                  onClick={() => imageInput.current?.click()}
+                >
+                  <ImagePlus size={23} aria-hidden="true" />
+                  <span>이미지 삽입</span>
+                </button>
+                <button
+                  type="button"
+                  className="ribbon-command"
+                  disabled={busy || loading || preparingEdit || !page}
+                  aria-label="이미지·도형 붙여넣기"
+                  title="클립보드의 이미지·도형 붙여넣기 (Ctrl+V)"
+                  onClick={() => void insertGraphic(readGraphicClipboard)}
+                >
+                  <ClipboardPaste size={23} aria-hidden="true" />
+                  <span>붙여넣기</span>
+                </button>
+              </div>
+              <span className="ribbon-caption">이미지·도형</span>
+            </div>
+            <div className="ribbon-group">
               <label className="flex flex-1 items-center gap-2 text-stone-600">
                 <Type size={18} aria-hidden="true" />
                 <span className="sr-only">글꼴</span>
@@ -1129,25 +1233,9 @@ export function PdfPreview({ file }: { file: FileInfo }) {
                         ? selected.font
                         : "텍스트 선택"}
                   </option>
-                  <optgroup label="기본 제공 글꼴">
-                    {fonts
-                      .filter((font) => font.source !== "installed")
-                      .map((font) => (
-                        <option key={font.id} value={font.id}>
-                          {font.name}
-                        </option>
-                      ))}
-                  </optgroup>
-                  {fonts.some((font) => font.source === "installed") && (
-                    <optgroup label="이 PC의 글꼴">
-                      {fonts
-                        .filter((font) => font.source === "installed")
-                        .map((font) => (
-                          <option key={font.id} value={font.id}>
-                            {font.name}
-                          </option>
-                        ))}
-                    </optgroup>
+                  <optgroup label="기본 제공 글꼴">{fontChoices.bundled}</optgroup>
+                  {fontChoices.installed.length > 0 && (
+                    <optgroup label="이 PC의 글꼴">{fontChoices.installed}</optgroup>
                   )}
                 </select>
               </label>
@@ -1220,6 +1308,63 @@ export function PdfPreview({ file }: { file: FileInfo }) {
                   ))}
                 </select>
               </div>
+              {selected && (
+                <div className="flex flex-col gap-1">
+                  <SizeControls
+                    key={`${editState.revision}:${selected.id}`}
+                    label="텍스트"
+                    width={
+                      Math.max(...selected.bounds.map((p) => p[0])) -
+                      Math.min(...selected.bounds.map((p) => p[0]))
+                    }
+                    height={
+                      Math.max(...selected.bounds.map((p) => p[1])) -
+                      Math.min(...selected.bounds.map((p) => p[1]))
+                    }
+                    disabled={
+                      busy ||
+                      loading ||
+                      preparingEdit ||
+                      unsavedDraft ||
+                      selected.fontChangeBlocked !== null
+                    }
+                    onApply={(width, height) => {
+                      const oldWidth =
+                        Math.max(...selected.bounds.map((p) => p[0])) -
+                        Math.min(...selected.bounds.map((p) => p[0]));
+                      const oldHeight =
+                        Math.max(...selected.bounds.map((p) => p[1])) -
+                        Math.min(...selected.bounds.map((p) => p[1]));
+                      if (oldWidth > 0 && oldHeight > 0)
+                        void run({
+                          kind: "scaleText",
+                          page: pageIndex,
+                          objects: [
+                            ...new Set(selected.group?.runs.map((r) => r.object) ?? [selected.id]),
+                          ],
+                          sx: width / oldWidth,
+                          sy: height / oldHeight,
+                        });
+                    }}
+                  />
+                  <span className="text-[10px] text-stone-500">
+                    단위 pt · 가로·세로를 각각 늘이기 · 문단 핸들로 줄바꿈 폭 조절
+                  </span>
+                  {selected.group?.canFlow && (
+                    <button
+                      type="button"
+                      aria-label="너비 자동 확장"
+                      aria-pressed={blockSize === null}
+                      disabled={busy || loading || preparingEdit}
+                      onClick={() => setBlockSize(null)}
+                      className="self-start rounded border px-2 py-1 text-xs aria-pressed:bg-emerald-50 aria-pressed:text-emerald-800 disabled:opacity-40"
+                      title="입력에 맞춰 너비가 늘어나고 페이지 오른쪽 끝에서 줄바꿈됩니다."
+                    >
+                      {blockSize === null ? "너비 자동 확장 켜짐" : "너비 자동 확장"}
+                    </button>
+                  )}
+                </div>
+              )}
               <div className="flex items-center gap-1" role="group" aria-label="텍스트 정렬">
                 {(
                   [

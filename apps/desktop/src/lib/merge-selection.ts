@@ -36,6 +36,9 @@ export function mergeSelection(
     group.bounds.push(...source.bounds);
     group.screenBounds.push(...source.screenBounds);
   }
+  group.followingObjects = [
+    ...new Set(ordered.flatMap((s) => s.group!.followingObjects ?? [])),
+  ].filter((id) => !ids.has(id));
   const result = groupSelection(group, objects);
   return result ? { ...result, mergedGroups: ordered.map((s) => s.group!.id) } : null;
 }

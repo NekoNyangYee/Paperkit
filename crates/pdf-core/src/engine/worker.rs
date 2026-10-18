@@ -14,6 +14,28 @@ pub(super) fn run(library: PathBuf, font_directory: PathBuf, receiver: Receiver<
     let mut history = History::default();
     while let Ok(request) = receiver.recv() {
         match request {
+            Request::CopyGraphic {
+                id,
+                revision,
+                page,
+                object,
+                reply,
+            } => {
+                let result = (|| {
+                    let pdfium = pdfium
+                        .as_ref()
+                        .map_err(|_| PreviewError::LibraryUnavailable)?;
+                    let (_, document) = current
+                        .as_ref()
+                        .filter(|(active, _)| *active == id)
+                        .ok_or(PreviewError::StaleObject)?;
+                    if history.state.revision != revision {
+                        return Err(PreviewError::StaleObject);
+                    }
+                    crate::graphics::copy(pdfium, document, page, object)
+                })();
+                let _ = reply.send(result);
+            }
             Request::Background {
                 foreground,
                 id,
@@ -76,7 +98,10 @@ pub(super) fn run(library: PathBuf, font_directory: PathBuf, receiver: Receiver<
                             .remove_object_at_index(id)
                             .map_err(|_| PreviewError::RenderFailed)?;
                     }
-                    Ok(render_loaded_page(&candidate, &target, page, width, foreground)?.png)
+                    Ok(
+                        render_loaded_page(&candidate, &target, page, width, foreground, false)?
+                            .png,
+                    )
                 })();
                 let _ = reply.send(result);
             }
@@ -114,17 +139,17 @@ pub(super) fn run(library: PathBuf, font_directory: PathBuf, receiver: Receiver<
                     let text = object
                         .as_text_object()
                         .ok_or(PreviewError::UnsupportedText)?;
-                    let data = crate::fonts::preserved_bytes(
-                        document,
-                        &text.font(),
-                        value.as_deref().unwrap_or(
-                            &page
-                                .text()
-                                .map_err(|_| PreviewError::UnsupportedText)?
-                                .for_object(text)
-                                .trim_end(),
-                        ),
-                    )?;
+                    let extracted;
+                    let needed = if let Some(value) = value.as_deref() {
+                        value
+                    } else {
+                        extracted = page
+                            .text()
+                            .map_err(|_| PreviewError::UnsupportedText)?
+                            .for_object(text);
+                        extracted.trim_end()
+                    };
+                    let data = crate::fonts::preserved_bytes(document, &text.font(), needed)?;
                     Ok(data)
                 })();
                 let _ = reply.send(result);

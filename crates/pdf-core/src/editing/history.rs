@@ -40,6 +40,9 @@ impl History {
                 self.saved = self.bytes.clone();
             }
             action @ (EditAction::Page { .. }
+            | EditAction::ScaleText { .. }
+            | EditAction::PasteGraphic { .. }
+            | EditAction::PasteImage { .. }
             | EditAction::TransformGraphic { .. }
             | EditAction::DeleteGraphic { .. }
             | EditAction::AlignBlock { .. }

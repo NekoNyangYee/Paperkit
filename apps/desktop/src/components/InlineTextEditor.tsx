@@ -47,6 +47,9 @@ export function InlineTextEditor({
   visible,
   onFontsReady,
   onFontError,
+  onGrowth,
+  autoWidth,
+  onLayout,
 }: {
   selected: TextSelection;
   draft: string;
@@ -57,6 +60,9 @@ export function InlineTextEditor({
   visible: boolean;
   onFontsReady: () => void;
   onFontError: (message: string) => void;
+  onGrowth?: (pixels: number) => void;
+  autoWidth?: { minimum: number; maximum: number };
+  onLayout?: (size: { width: number; height: number }) => void;
   point: { x: number; y: number } | null;
   onDraft: (text: string) => void;
   onApply: (text?: string) => void;
@@ -64,6 +70,8 @@ export function InlineTextEditor({
 }) {
   const alignment = selected.alignment ?? selected.originalAlignment ?? "left";
   const input = useRef<HTMLDivElement>(null);
+  const layoutCallback = useRef(onLayout);
+  layoutCallback.current = onLayout;
   const composing = useRef(false);
   const touched = useRef(false);
   const [family, setFamily] = useState<string | null>(null);
@@ -214,8 +222,10 @@ export function InlineTextEditor({
               ((source.matrix[4] - selected.matrix[4]) * scale) /
                 (Math.abs(selected.matrix[0] / selected.matrix[3]) || 1),
             );
-          if (newLine && alignment === "left")
+          if (newLine && alignment === "left") {
             span.style.marginLeft = `${((source.matrix[4] - selected.matrix[4]) * scale) / (Math.abs(selected.matrix[0] / selected.matrix[3]) || 1)}px`;
+            span.dataset.pdfIndent = span.style.marginLeft;
+          }
           if (
             run.objectStart === 0 &&
             run.end - run.start >= Array.from(source.text.trimEnd()).length
@@ -247,6 +257,7 @@ export function InlineTextEditor({
       input.current?.querySelectorAll<HTMLElement>("span").forEach((span) => {
         span.style.marginLeft = "0px";
         delete span.dataset.pdfX;
+        delete span.dataset.pdfIndent;
       });
   }, [selected.alignment]);
   const releaseOriginalPositions = () => {
@@ -254,7 +265,7 @@ export function InlineTextEditor({
     // Original run offsets align the initial PDF preview only. Keeping them
     // after inserting/deleting text can pull the following run over its neighbor.
     input.current?.querySelectorAll<HTMLElement>("[data-source-font]").forEach((span) => {
-      span.style.marginLeft = "0px";
+      span.style.marginLeft = span.dataset.pdfIndent ?? "0px";
       span.style.letterSpacing = "normal";
       delete span.dataset.pdfX;
       delete span.dataset.pdfWidth;
@@ -272,14 +283,54 @@ export function InlineTextEditor({
       ? Math.abs(
           Math.max(...lineBoxes[0].map((p) => p[1])) - Math.max(...lineBoxes[1].map((p) => p[1])),
         ) * scale
-      : fontSize * 1.25;
+      : fontSize * 1.4;
   const sourceSizes = selected.group?.runs.map((run) => {
     const source = objects.find((object) => object.id === run.object);
     return source ? source.fontSize * scale * Math.abs(source.matrix[3]) : fontSize;
   }) ?? [fontSize];
   const leading = Math.max(...sourceSizes.map((size) => size * 1.15), measuredLeading);
+  const originalRows = new Set(
+    (selected.group?.runs ?? [{ object: selected.id }]).map((run) => {
+      const source = objects.find((o) => o.id === run.object) ?? selected;
+      return Math.round(source.matrix[5] * 10);
+    }),
+  ).size;
   const horizontalScale = Math.abs(selected.matrix[0] / selected.matrix[3]) || 1;
   const leftOffset = (selected.matrix[4] - Math.min(...selected.bounds.map((p) => p[0]))) * scale;
+  const contentOffset = alignment === "left" ? leftOffset : 0;
+  useLayoutEffect(() => {
+    const element = input.current;
+    if (!element || !visible || !family) return;
+    const measure = (entries?: ResizeObserverEntry[]) => {
+      // Native layers are prepared once; typing, wrapping and IME only resize
+      // local DOM and translate those layers.
+      const growth = element.scrollHeight - Math.max(1, originalRows) * leading;
+      onGrowth?.(growth > 1 ? growth : 0);
+      const rect = entries?.find((entry) => entry.target === element)?.contentRect;
+      const width = rect?.width ?? parseFloat(getComputedStyle(element).width);
+      const height = rect?.height ?? element.scrollHeight;
+      if (Number.isFinite(width) && width > 0)
+        layoutCallback.current?.({
+          width: width * horizontalScale + contentOffset,
+          height: Math.max(0, baselineOffset) + height,
+        });
+    };
+    measure();
+    if (typeof ResizeObserver === "undefined") return;
+    const observer = new ResizeObserver(measure);
+    observer.observe(element);
+    return () => observer.disconnect();
+  }, [
+    visible,
+    family,
+    horizontalScale,
+    contentOffset,
+    baselineOffset,
+    originalRows,
+    leading,
+    onGrowth,
+    draft,
+  ]);
   useEffect(() => {
     if (!family || typeof CanvasRenderingContext2D === "undefined") return;
     const context = document.createElement("canvas").getContext("2d");
@@ -345,7 +396,13 @@ export function InlineTextEditor({
           textAlign: alignment,
           transform: `scaleX(${horizontalScale})`,
           transformOrigin: "left top",
-          width: `${100 / horizontalScale}%`,
+          width: autoWidth ? "max-content" : `${100 / horizontalScale}%`,
+          minWidth: autoWidth
+            ? Math.max(0, autoWidth.minimum - contentOffset) / horizontalScale
+            : undefined,
+          maxWidth: autoWidth
+            ? Math.max(0, autoWidth.maximum - contentOffset) / horizontalScale
+            : undefined,
           fontVariationSettings: selected.font.includes("Thin")
             ? '"wght" 100'
             : selected.font.includes("ExtraLight")

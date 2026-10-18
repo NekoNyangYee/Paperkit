@@ -192,7 +192,7 @@ it("remembers PDF line boundaries and hanging indent without changing draft spac
   input.querySelectorAll("span")[1].textContent = "Edited";
   fireEvent.input(input);
   expect(onDraft).toHaveBeenLastCalledWith("First Edited");
-  expect(input.querySelectorAll("span")[1].style.marginLeft).toBe("0px");
+  expect(input.querySelectorAll("span")[1].style.marginLeft).toBe("-10px");
   expect(input.querySelectorAll("span")[1].dataset.pdfX).toBeUndefined();
   expect(input.querySelectorAll("span")[1].style.letterSpacing).toBe("normal");
 });

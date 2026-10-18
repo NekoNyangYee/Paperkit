@@ -41,6 +41,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 }));
 import { PdfPreview } from "./PdfPreview";
 import { useAppStore } from "../stores/app-store";
+import { rememberGraphic } from "../lib/graphic-clipboard";
 
 const file = { id: "file-1", path: "C:\\example.pdf", name: "example.pdf", sizeBytes: 100 };
 const page = (index = 0, width = 800) => ({
@@ -100,6 +101,104 @@ const object = {
   editBlocked: null,
   fontChangeBlocked: null,
 };
+
+it("opens the image file picker from the ribbon and can insert the same file again", async () => {
+  let revision = 0;
+  mocks.invoke.mockImplementation(async (command, args) => {
+    const state = () => ({ revision, dirty: revision > 0, canUndo: revision > 0, canRedo: false });
+    if (command === "render_selected_page")
+      return { ...page(args.pageIndex, args.width), state: state() };
+    if (command === "edit_document") {
+      revision++;
+      return state();
+    }
+  });
+  render(<PdfPreview file={file} />);
+  await enableEditing();
+  const button = screen.getByRole("button", { name: "이미지 삽입" });
+  expect(screen.getByLabelText("편집 도구").contains(button)).toBe(true);
+  expect(
+    screen
+      .getByLabelText("편집 도구")
+      .contains(screen.getByRole("button", { name: "이미지·도형 붙여넣기" })),
+  ).toBe(true);
+  const input = screen.getByLabelText("삽입할 이미지 파일") as HTMLInputElement;
+  const picker = vi.spyOn(input, "click").mockImplementation(() => {});
+  fireEvent.click(button);
+  expect(picker).toHaveBeenCalledOnce();
+  fireEvent.change(input, { target: { files: [] } });
+  expect(mocks.invoke.mock.calls.some(([command]) => command === "edit_document")).toBe(false);
+  const image = new File([new Uint8Array([1, 2, 3, 4])], "picture.png", { type: "image/png" });
+  Object.defineProperty(image, "arrayBuffer", {
+    value: async () => new Uint8Array([1, 2, 3, 4]).buffer,
+  });
+  for (const expectedRevision of [0, 1]) {
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+    fireEvent.change(input, { target: { files: [image] } });
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
+        fileId: file.id,
+        revision: expectedRevision,
+        action: { kind: "pasteImage", page: 0, png: [1, 2, 3, 4] },
+      }),
+    );
+    expect(input.value).toBe("");
+    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
+  }
+});
+
+it("reports image file read failures without modifying the PDF", async () => {
+  render(<PdfPreview file={file} />);
+  await enableEditing();
+  const image = new File([], "broken.png", { type: "image/png" });
+  Object.defineProperty(image, "arrayBuffer", {
+    value: async () => {
+      throw new Error("이미지 파일을 읽지 못했습니다.");
+    },
+  });
+  fireEvent.change(screen.getByLabelText("삽입할 이미지 파일"), { target: { files: [image] } });
+  expect(await screen.findByRole("alert")).toHaveProperty(
+    "textContent",
+    "이미지 파일을 읽지 못했습니다.",
+  );
+  expect(mocks.invoke.mock.calls.some(([command]) => command === "edit_document")).toBe(false);
+  expect((screen.getByRole("button", { name: "이미지 삽입" }) as HTMLButtonElement).disabled).toBe(
+    false,
+  );
+});
+
+it("pastes copied PDF objects from the ribbon", async () => {
+  const marker = rememberGraphic([37, 80, 68, 70]);
+  vi.stubGlobal(
+    "navigator",
+    Object.create(navigator, {
+      clipboard: {
+        value: {
+          read: vi
+            .fn()
+            .mockResolvedValue([
+              { types: ["text/plain"], getType: async () => ({ text: async () => marker }) },
+            ]),
+        },
+      },
+    }),
+  );
+  mocks.invoke.mockImplementation(async (command, args) => {
+    if (command === "render_selected_page") return page(args.pageIndex, args.width);
+    if (command === "edit_document")
+      return { revision: 1, dirty: true, canUndo: true, canRedo: false };
+  });
+  render(<PdfPreview file={file} />);
+  await enableEditing();
+  fireEvent.click(screen.getByRole("button", { name: "이미지·도형 붙여넣기" }));
+  await waitFor(() =>
+    expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
+      fileId: file.id,
+      revision: 0,
+      action: { kind: "pasteGraphic", page: 0, source: [37, 80, 68, 70] },
+    }),
+  );
+});
 
 it("duplicates and deletes pages with the current revision and keeps undo navigation in range", async () => {
   let count = 2,
@@ -560,56 +659,172 @@ it("selects without editing and sends a PDF-coordinate drag as one mutation", as
   }
 });
 
-it("resizes a flowing block and accepts text longer than its old bounds", async () => {
-  vi.stubGlobal(
-    "PointerEvent",
-    class extends MouseEvent {
-      pointerId = 1;
-    },
-  );
-  Object.defineProperty(HTMLElement.prototype, "setPointerCapture", {
-    configurable: true,
-    value: vi.fn(),
-  });
-  mocks.invoke.mockImplementation(async (command, args) => {
-    if (command === "render_selected_page") {
-      const value = groupedPage(args.pageIndex, args.width);
-      return {
-        ...value,
-        text: { ...value.text, groups: value.text.groups.map((g) => ({ ...g, canFlow: true })) },
-      };
+it.each([false, true])(
+  "resizes a flowing block and can restore automatic width (automatic=%s)",
+  async (automatic) => {
+    vi.stubGlobal(
+      "PointerEvent",
+      class extends MouseEvent {
+        pointerId = 1;
+      },
+    );
+    Object.defineProperty(HTMLElement.prototype, "setPointerCapture", {
+      configurable: true,
+      value: vi.fn(),
+    });
+    mocks.invoke.mockImplementation(async (command, args) => {
+      if (command === "render_selected_page") {
+        const value = groupedPage(args.pageIndex, args.width);
+        return {
+          ...value,
+          text: { ...value.text, groups: value.text.groups.map((g) => ({ ...g, canFlow: true })) },
+        };
+      }
+      if (command === "edit_document")
+        return { revision: 1, dirty: true, canUndo: true, canRedo: false };
+    });
+    try {
+      render(<PdfPreview file={file} />);
+      await enableEditing("paragraph");
+      fireEvent.click(await screen.findByRole("button", { name: "블록 선택: Hello World" }), {
+        altKey: true,
+      });
+      const handle = screen.getByRole("button", { name: "블록 크기 조절" });
+      fireEvent.pointerDown(handle, { clientX: 400, clientY: 320, pointerId: 1 });
+      fireEvent.pointerMove(handle, { clientX: 480, clientY: 400, pointerId: 1 });
+      fireEvent.pointerUp(handle, { clientX: 480, clientY: 400, pointerId: 1 });
+      expect(
+        screen.getByRole("button", { name: "너비 자동 확장" }).getAttribute("aria-pressed"),
+      ).toBe("false");
+      if (automatic) {
+        fireEvent.click(screen.getByRole("button", { name: "너비 자동 확장" }));
+        expect(
+          screen.getByRole("button", { name: "너비 자동 확장" }).getAttribute("aria-pressed"),
+        ).toBe("true");
+      }
+      fireEvent.click(screen.getByRole("button", { name: "내용 수정" }));
+      await screen.findByTestId("inline-block");
+      if (!automatic) expect(screen.getByTestId("inline-block").style.width).toBe("400px");
+      const value = "A much longer paragraph that wraps and keeps growing beyond the old line.";
+      fireEvent.input(screen.getByRole("textbox", { name: "내용" }), {
+        target: { textContent: value },
+      });
+      fireEvent.keyDown(screen.getByRole("textbox", { name: "내용" }), { key: "Enter" });
+      await waitFor(() =>
+        expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
+          fileId: file.id,
+          revision: 0,
+          action: {
+            kind: "flowBlock",
+            page: 0,
+            group: 0,
+            text: value,
+            ...(automatic ? {} : { width: 100, height: 36 }),
+          },
+        }),
+      );
+      await waitFor(() => expect(screen.queryByRole("textbox", { name: "내용" })).toBeNull());
+    } finally {
+      delete (HTMLElement.prototype as unknown as { setPointerCapture?: unknown })
+        .setPointerCapture;
     }
+  },
+);
+
+it.each([false, true])(
+  "validates shared fonts once for text edits and skips font checks for resize only (edit=%s)",
+  async (editText) => {
+    vi.stubGlobal(
+      "PointerEvent",
+      class extends MouseEvent {
+        pointerId = 1;
+      },
+    );
+    const capture = HTMLElement.prototype.setPointerCapture;
+    HTMLElement.prototype.setPointerCapture = vi.fn();
+    mocks.invoke.mockImplementation(async (command, args) => {
+      if (command === "render_selected_page") {
+        const value = groupedPage(args.pageIndex, args.width);
+        return {
+          ...value,
+          text: {
+            ...value.text,
+            objects: value.text.objects.map((o) => ({ ...o, font: "Gulim", fontObjectId: 0 })),
+            groups: value.text.groups.map((g) => ({ ...g, canFlow: true })),
+          },
+        };
+      }
+      if (command === "document_font") return "AA==";
+      if (command === "editing_background") return "data:image/png;base64,AA==";
+      if (command === "edit_document")
+        return { revision: 1, dirty: true, canUndo: true, canRedo: false };
+    });
+    try {
+      render(<PdfPreview file={file} />);
+      await enableEditing();
+      fireEvent.click(await screen.findByRole("button", { name: "블록 선택: Hello World" }));
+      const handle = screen.getByRole("button", { name: "블록 가로 조절" });
+      fireEvent.pointerDown(handle, { clientX: 400, clientY: 300 });
+      fireEvent.pointerMove(handle, { clientX: 480, clientY: 300 });
+      fireEvent.pointerUp(handle);
+      const value = editText ? "Hello inserted World" : "Hello World";
+      if (editText) {
+        fireEvent.click(screen.getByRole("button", { name: "내용 수정" }));
+        const input = await screen.findByRole("textbox", { name: "내용" });
+        fireEvent.input(input, { target: { textContent: value } });
+        fireEvent.keyDown(input, { key: "Enter" });
+      } else fireEvent.click(screen.getByRole("button", { name: "적용" }));
+      await waitFor(() =>
+        expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
+          fileId: file.id,
+          revision: 0,
+          action: { kind: "flowBlock", page: 0, group: 0, text: value, width: 100, height: 16 },
+        }),
+      );
+      const validation = mocks.invoke.mock.calls.filter(
+        ([command, args]) => command === "document_font" && args.validateOnly,
+      );
+      expect(validation).toHaveLength(editText ? 1 : 0);
+      if (editText)
+        expect(validation[0][1]).toEqual({
+          fileId: file.id,
+          revision: 0,
+          pageIndex: 0,
+          objectId: 0,
+          text: value,
+          validateOnly: true,
+        });
+    } finally {
+      HTMLElement.prototype.setPointerCapture = capture;
+    }
+  },
+);
+
+it("stretches text horizontally and vertically without requiring another font", async () => {
+  mocks.invoke.mockImplementation(async (command, args) => {
+    if (command === "render_selected_page")
+      return { ...page(args.pageIndex, args.width), text: { objects: [object], warning: null } };
     if (command === "edit_document")
       return { revision: 1, dirty: true, canUndo: true, canRedo: false };
   });
-  try {
-    render(<PdfPreview file={file} />);
-    await enableEditing("paragraph");
-    fireEvent.click(await screen.findByRole("button", { name: "블록 선택: Hello World" }), {
-      altKey: true,
-    });
-    const handle = screen.getByRole("button", { name: "블록 크기 조절" });
-    fireEvent.pointerDown(handle, { clientX: 400, clientY: 320, pointerId: 1 });
-    fireEvent.pointerMove(handle, { clientX: 480, clientY: 400, pointerId: 1 });
-    fireEvent.pointerUp(handle, { clientX: 480, clientY: 400, pointerId: 1 });
-    fireEvent.click(screen.getByRole("button", { name: "내용 수정" }));
-    expect((await screen.findByTestId("inline-block")).className).not.toContain("outline");
-    const value = "A much longer paragraph that wraps and keeps growing beyond the old line.";
-    fireEvent.input(screen.getByRole("textbox", { name: "내용" }), {
-      target: { textContent: value },
-    });
-    fireEvent.keyDown(screen.getByRole("textbox", { name: "내용" }), { key: "Enter" });
-    await waitFor(() =>
-      expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
-        fileId: file.id,
-        revision: 0,
-        action: { kind: "flowBlock", page: 0, group: 0, text: value, width: 100, height: 36 },
-      }),
-    );
-    await waitFor(() => expect(screen.queryByRole("textbox", { name: "내용" })).toBeNull());
-  } finally {
-    delete (HTMLElement.prototype as unknown as { setPointerCapture?: unknown }).setPointerCapture;
-  }
+  render(<PdfPreview file={file} />);
+  await enableEditing();
+  fireEvent.click(await screen.findByRole("button", { name: "텍스트 선택: Hello World" }));
+  fireEvent.change(screen.getByRole("spinbutton", { name: "텍스트 가로" }), {
+    target: { value: "160" },
+  });
+  fireEvent.change(screen.getByRole("spinbutton", { name: "텍스트 세로" }), {
+    target: { value: "24" },
+  });
+  fireEvent.submit(screen.getByRole("form", { name: "텍스트 크기" }));
+  await waitFor(() =>
+    expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
+      fileId: file.id,
+      revision: 0,
+      action: { kind: "scaleText", page: 0, objects: [0], sx: 2, sy: 1.5 },
+    }),
+  );
+  expect(mocks.invoke.mock.calls.some(([command]) => command === "document_font")).toBe(false);
 });
 
 it("changes the font with a resized block in one transaction", async () => {
@@ -699,7 +914,7 @@ it("edits over the original non-text background without a white input panel", as
     });
     const editor = screen.getByTestId("inline-block");
     expect(editor.className).toContain("bg-transparent");
-    expect(editor.className).not.toContain("outline");
+    expect(editor.style.backgroundColor).not.toBe("white");
     expect(screen.getByRole("textbox", { name: "내용" }).getAttribute("aria-readonly")).toBe(
       "false",
     );
@@ -1142,6 +1357,7 @@ it("retries original font recovery instead of blocking solely on an earlier font
     pageIndex: 0,
     objectId: 0,
     text: "Hello World",
+    validateOnly: true,
   });
   expect(mocks.invoke.mock.calls.some(([command]) => command === "editor_font")).toBe(false);
 });

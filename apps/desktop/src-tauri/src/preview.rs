@@ -22,6 +22,7 @@ pub struct PreviewPage {
 fn message(error: PreviewError) -> String {
     match error {
         PreviewError::PageOverflow => "블록 너비가 너무 좁거나 내용이 페이지 경계를 벗어납니다. 블록 크기나 위치를 조절해 주세요.",
+        PreviewError::FollowingContentOverflow => "문단 아래 내용을 배치할 페이지 공간이 부족합니다. 문단 너비 또는 글자 크기를 조절해 주세요. 입력은 유지했습니다.",
         PreviewError::LayoutReflowRequired => "이 선택은 글자 수와 공백 위치를 유지해야 합니다. 길이를 바꾸려면 같은 서식의 블록을 선택해 주세요.",
         PreviewError::FontUnavailable => {
             "원본 글꼴 데이터를 사용할 수 없습니다. ‘원본 글꼴 불러오기’에서 동일한 이름·굵기의 TTF/TTC를 선택해 주세요. 다른 글꼴로 자동 교체하지 않습니다."
@@ -54,7 +55,7 @@ fn message(error: PreviewError) -> String {
             "이 객체 또는 입력 문자는 아직 안전하게 수정할 수 없습니다."
         }
         PreviewError::TextOverflow => {
-            "새 텍스트가 기존 영역을 벗어납니다. 더 짧은 내용으로 입력해 주세요."
+            "텍스트가 페이지 경계 또는 고정 셀 범위를 벗어납니다. 블록의 위치·너비·크기를 조절해 주세요."
         }
         PreviewError::VerificationFailed => {
             "변경 결과를 검증하지 못했습니다. 작업을 반영하지 않았습니다."
@@ -126,19 +127,43 @@ pub async fn editing_background(
 }
 
 #[tauri::command]
+pub async fn copy_graphic(
+    file_id: String,
+    revision: u64,
+    page_index: i32,
+    object_id: usize,
+    preview: State<'_, PreviewState>,
+) -> Result<Vec<u8>, String> {
+    let engine = preview.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        engine.copy_graphic(file_id, revision, page_index, object_id)
+    })
+    .await
+    .map_err(|_| "객체를 복사하지 못했습니다.".to_owned())?
+    .map_err(message)
+}
+
+#[tauri::command]
 pub async fn document_font(
     file_id: String,
     revision: u64,
     page_index: i32,
     object_id: usize,
     text: Option<String>,
+    validate_only: Option<bool>,
     preview: State<'_, PreviewState>,
 ) -> Result<String, String> {
     let engine = preview.0.clone();
     tauri::async_runtime::spawn_blocking(move || {
         engine
             .font_for_text(file_id, revision, page_index, object_id, text)
-            .map(|bytes| base64::engine::general_purpose::STANDARD.encode(bytes))
+            .map(|bytes| {
+                if validate_only.unwrap_or(false) {
+                    String::new()
+                } else {
+                    base64::engine::general_purpose::STANDARD.encode(bytes)
+                }
+            })
             .map_err(message)
     })
     .await

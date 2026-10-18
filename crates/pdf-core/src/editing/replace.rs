@@ -43,7 +43,7 @@ pub(super) fn replace_group(
     if group.edit_blocked.is_some() {
         return Err(PreviewError::UnsupportedText);
     }
-    if value.len() > 4096 || value.trim().is_empty() || value.chars().any(char::is_control) {
+    if value.len() > 32768 || value.trim().is_empty() || value.chars().any(char::is_control) {
         return Err(PreviewError::UnsupportedText);
     }
     let old: Vec<_> = group.text.chars().collect();
@@ -219,7 +219,7 @@ fn replace_with_bounds(
             .ok_or(PreviewError::StaleObject)?;
     }
     let value = value.unwrap_or(&before.text);
-    if value.trim().is_empty() || value.len() > 4096 || value.chars().any(char::is_control) {
+    if value.trim().is_empty() || value.len() > 32768 || value.chars().any(char::is_control) {
         return Err(PreviewError::UnsupportedText);
     }
     let preserved = if font.is_none() && before.font_change_blocked.is_none() {
@@ -412,44 +412,18 @@ fn replace_with_bounds(
     {
         return Err(PreviewError::ChangedTextMismatch);
     }
-    // No automatic reflow. Font changes allow bounded bearing/height differences,
-    // while the right edge stays within the original width (plus rounding tolerance).
-    let min_x = before
-        .bounds
-        .iter()
-        .map(|p| p[0])
-        .fold(f32::INFINITY, f32::min)
-        - if font_replaced {
-            before.font_size * before.matrix[0] * 0.15
-        } else {
-            0.5
-        };
-    let max_x = before
-        .bounds
-        .iter()
-        .map(|p| p[0])
-        .fold(f32::NEG_INFINITY, f32::max)
-        + 0.5;
-    let min_y = before
-        .bounds
-        .iter()
-        .map(|p| p[1])
-        .fold(f32::INFINITY, f32::min)
-        - if font_replaced {
-            before.font_size * before.matrix[3] * 0.25
-        } else {
-            1.0
-        };
-    let max_y = before
-        .bounds
-        .iter()
-        .map(|p| p[1])
-        .fold(f32::NEG_INFINITY, f32::max)
-        + if font_replaced {
-            before.font_size * before.matrix[3] * 0.25
-        } else {
-            1.0
-        };
+    // Standalone text may grow beyond its old ink box. Page boundaries remain
+    // the physical limit; fixed-cell patch operations still use their own cells.
+    let media = page
+        .boundaries()
+        .media()
+        .map_err(|_| PreviewError::EditFailed)?
+        .bounds;
+    let crop = page.boundaries().crop().map(|b| b.bounds).unwrap_or(media);
+    let min_x = media.left().value.max(crop.left().value) - 0.5;
+    let max_x = media.right().value.min(crop.right().value) + 0.5;
+    let min_y = media.bottom().value.max(crop.bottom().value) - 0.5;
+    let max_y = media.top().value.min(crop.top().value) + 0.5;
     // Fixed-length group edits may use the original glyph advance cells, rather
     // than the old letter's ink shape. This permits different Hangul syllables
     // without allowing wider text or a new overlap with adjacent objects.
@@ -463,7 +437,7 @@ fn replace_with_bounds(
     {
         return Err(PreviewError::TextOverflow);
     }
-    if font_replaced || cell.is_some() {
+    if cell.is_some() {
         let rect = |o: &text::TextObject| {
             [
                 o.bounds.iter().map(|p| p[0]).fold(f32::INFINITY, f32::min),

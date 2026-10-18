@@ -11,6 +11,41 @@ fn sample() -> Vec<u8> {
 }
 
 #[test]
+#[ignore = "requires bundled fonts"]
+fn maps_family_localized_and_pdf_style_aliases_without_changing_weight() {
+    let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("../../apps/desktop/src-tauri/resources/fonts");
+    let aliases = vec!["ABCDEF+Pretendard_Regular".into(), "Pretendard".into()];
+    assert_eq!(
+        fonts::import_original(&resources.join("Pretendard-Regular.ttf"), &aliases).unwrap(),
+        aliases
+    );
+    assert!(fonts::import_original(
+        &resources.join("Pretendard-Bold.ttf"),
+        &["Pretendard".into()]
+    )
+    .is_err());
+    assert!(fonts::import_original(
+        &resources.join("Pretendard-Regular.ttf"),
+        &["Pretendard,Bold".into()]
+    )
+    .is_err());
+    assert_eq!(
+        fonts::import_original(
+            &resources.join("Pretendard-Bold.ttf"),
+            &["ABCDEF+Pretendard,Bold".into()]
+        )
+        .unwrap(),
+        vec!["ABCDEF+Pretendard,Bold"]
+    );
+    let font = PathBuf::from(std::env::var_os("WINDIR").unwrap()).join("Fonts/malgun.ttf");
+    assert_eq!(
+        fonts::import_original(&font, &["맑은 고딕".into(), "Malgun Gothic".into()]).unwrap(),
+        vec!["맑은 고딕", "Malgun Gothic"]
+    );
+}
+
+#[test]
 #[ignore = "requires bundled PDFium and fonts"]
 fn imported_original_face_edits_and_saves_without_os_installation() {
     let resources =

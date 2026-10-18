@@ -2824,7 +2824,7 @@ dependencies = [
 
 [[package]]
 name = "paperkit-desktop"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "base64 0.22.1",
  "pdf-core",
@@ -2870,7 +2870,7 @@ dependencies = [
 
 [[package]]
 name = "pdf-core"
-version = "0.4.0"
+version = "0.5.0"
 dependencies = [
  "lopdf",
  "pdfium-render",

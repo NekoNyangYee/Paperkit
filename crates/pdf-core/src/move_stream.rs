@@ -6,13 +6,36 @@ use lopdf::{
 };
 use std::collections::BTreeSet;
 
-pub(crate) fn translate(
+pub(crate) fn multiply(a: [f32; 6], b: [f32; 6]) -> [f32; 6] {
+    [
+        a[0] * b[0] + a[2] * b[1],
+        a[1] * b[0] + a[3] * b[1],
+        a[0] * b[2] + a[2] * b[3],
+        a[1] * b[2] + a[3] * b[3],
+        a[0] * b[4] + a[2] * b[5] + a[4],
+        a[1] * b[4] + a[3] * b[5] + a[5],
+    ]
+}
+pub(crate) fn inverse(m: [f32; 6]) -> Result<[f32; 6], PreviewError> {
+    let det = m[0] * m[3] - m[1] * m[2];
+    if !det.is_finite() || det.abs() < 1e-8 {
+        return Err(PreviewError::UnsupportedText);
+    }
+    Ok([
+        m[3] / det,
+        -m[1] / det,
+        -m[2] / det,
+        m[0] / det,
+        (m[2] * m[5] - m[3] * m[4]) / det,
+        (m[1] * m[4] - m[0] * m[5]) / det,
+    ])
+}
+pub(crate) fn transform(
     original: &[u8],
     page_index: i32,
     objects: &[TextObject],
     ids: &BTreeSet<usize>,
-    dx: f32,
-    dy: f32,
+    matrix: [f32; 6],
 ) -> Result<Vec<u8>, PreviewError> {
     let mut doc = Document::load_mem(original).map_err(|_| PreviewError::EditFailed)?;
     let page_id = *doc
@@ -47,7 +70,7 @@ pub(crate) fn translate(
         return Err(PreviewError::UnsupportedText);
     }
     let mut output = Vec::new();
-    let mut linear = [1.0f32, 0.0, 0.0, 1.0];
+    let mut linear = [1.0f32, 0.0, 0.0, 1.0, 0.0, 0.0];
     let mut stack = Vec::new();
     let mut ordinal = 0;
     for op in content.operations {
@@ -63,13 +86,10 @@ pub(crate) fn translate(
                     .iter()
                     .map(|v| v.as_float().map_err(|_| PreviewError::UnsupportedText))
                     .collect::<Result<Vec<_>, _>>()?;
-                let [a, b, c, d] = linear;
-                linear = [
-                    a * m[0] + c * m[1],
-                    b * m[0] + d * m[1],
-                    a * m[2] + c * m[3],
-                    b * m[2] + d * m[3],
-                ];
+                linear = multiply(
+                    linear,
+                    m.try_into().map_err(|_| PreviewError::UnsupportedText)?,
+                );
             }
             _ => (),
         }
@@ -81,25 +101,15 @@ pub(crate) fn translate(
             false
         };
         if selected {
-            let [a, b, c, d] = linear;
-            let det = a * d - b * c;
-            if !det.is_finite() || det.abs() < 1e-8 {
+            let local = multiply(multiply(inverse(linear)?, matrix), linear);
+            if local.iter().any(|v| !v.is_finite()) {
                 return Err(PreviewError::UnsupportedText);
             }
-            let x = (d * dx - c * dy) / det;
-            let y = (a * dy - b * dx) / det;
-            if !x.is_finite() || !y.is_finite() {
-                return Err(PreviewError::UnsupportedText);
-            }
-            let translate = |x: f32, y: f32| {
-                Operation::new(
-                    "cm",
-                    vec![1.into(), 0.into(), 0.into(), 1.into(), x.into(), y.into()],
-                )
-            };
-            output.push(translate(x, y));
+            let operation =
+                |m: [f32; 6]| Operation::new("cm", m.into_iter().map(Object::Real).collect());
+            output.push(operation(local));
             output.push(op);
-            output.push(translate(-x, -y));
+            output.push(operation(inverse(local)?));
         } else {
             output.push(op);
         }

@@ -23,6 +23,7 @@ export interface TextObject {
   fontChangeBlocked: string | null;
 }
 export interface TextGroup {
+  followingObjects?: number[];
   canFlow?: boolean;
   canReflow?: boolean;
   canChangeFont?: boolean;
@@ -80,6 +81,9 @@ export function groupSelection(group: TextGroup, objects: TextObject[]): TextSel
   };
 }
 export type EditAction =
+  | { kind: "scaleText"; page: number; objects: number[]; sx: number; sy: number }
+  | { kind: "pasteGraphic"; page: number; source: number[] }
+  | { kind: "pasteImage"; page: number; png: number[] }
   | {
       kind: "page";
       operation: "move" | "duplicate" | "rotate" | "delete";

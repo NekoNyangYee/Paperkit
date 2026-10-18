@@ -15,6 +15,20 @@ pub struct EditState {
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum EditAction {
+    ScaleText {
+        page: i32,
+        objects: Vec<usize>,
+        sx: f32,
+        sy: f32,
+    },
+    PasteGraphic {
+        page: i32,
+        source: Vec<u8>,
+    },
+    PasteImage {
+        page: i32,
+        png: Vec<u8>,
+    },
     Page {
         page: i32,
         operation: crate::pages::PageOperation,

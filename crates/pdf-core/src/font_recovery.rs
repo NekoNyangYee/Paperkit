@@ -14,16 +14,6 @@ fn resolved<'a>(doc: &'a Document, object: &'a Object) -> Option<&'a Object> {
     doc.dereference(object).ok().map(|(_, value)| value)
 }
 
-// Only remove the PDF subset prefix. Keep face/weight/style spelling intact.
-fn face_name(name: &str) -> &str {
-    let bytes = name.as_bytes();
-    if bytes.len() > 7 && bytes[6] == b'+' && bytes[..6].iter().all(u8::is_ascii_uppercase) {
-        &name[7..]
-    } else {
-        name
-    }
-}
-
 pub(crate) fn matching_embedded(pdf: &[u8], name: &str, text: &str) -> Option<Vec<u8>> {
     let doc = Document::load_mem(pdf).ok()?;
     let mut seen = std::collections::BTreeSet::new();
@@ -43,7 +33,8 @@ pub(crate) fn matching_embedded(pdf: &[u8], name: &str, text: &str) -> Option<Ve
         else {
             continue;
         };
-        if face_name(candidate_name) != face_name(name) {
+        if crate::system_fonts::normalized(candidate_name) != crate::system_fonts::normalized(name)
+        {
             continue;
         }
         let Some(stream) = descriptor

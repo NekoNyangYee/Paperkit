@@ -6,6 +6,8 @@ mod block;
 pub mod document;
 pub mod edit;
 mod flow;
+mod flow_followers;
+mod flow_lines;
 mod font_recovery;
 pub mod fonts;
 mod graphics;

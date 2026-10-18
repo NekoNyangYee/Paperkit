@@ -17,7 +17,7 @@ function bare(name: string) {
   return name
     .replace(/^[A-Z]{6}\+/, "")
     .toLowerCase()
-    .replace(/[\s_.·-]/g, "");
+    .replace(/[\s_,.·-]/g, "");
 }
 export function namedWeight(name: string): number | null {
   const value = bare(name).replace(/mt$/, "");

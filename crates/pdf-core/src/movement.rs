@@ -12,7 +12,56 @@ pub(crate) fn translate(
     dx: f32,
     dy: f32,
 ) -> Result<Vec<u8>, PreviewError> {
-    if !dx.is_finite() || !dy.is_finite() || group.is_some() == object.is_some() {
+    transform(
+        pdfium,
+        original,
+        index,
+        group,
+        object,
+        None,
+        [1.0, 0.0, 0.0, 1.0, dx, dy],
+    )
+}
+
+pub(crate) fn scale(
+    pdfium: &Pdfium,
+    original: &[u8],
+    index: i32,
+    ids: &[usize],
+    sx: f32,
+    sy: f32,
+) -> Result<Vec<u8>, PreviewError> {
+    if !sx.is_finite()
+        || !sy.is_finite()
+        || sx <= 0.0
+        || sy <= 0.0
+        || ids.is_empty()
+        || ids.len() > 2048
+    {
+        return Err(PreviewError::UnsupportedText);
+    }
+    transform(
+        pdfium,
+        original,
+        index,
+        None,
+        None,
+        Some(ids),
+        [sx, 0.0, 0.0, sy, 0.0, 0.0],
+    )
+}
+fn transform(
+    pdfium: &Pdfium,
+    original: &[u8],
+    index: i32,
+    group: Option<usize>,
+    object: Option<usize>,
+    explicit_ids: Option<&[usize]>,
+    mut m: [f32; 6],
+) -> Result<Vec<u8>, PreviewError> {
+    if m.iter().any(|v| !v.is_finite())
+        || (explicit_ids.is_none() && group.is_some() == object.is_some())
+    {
         return Err(PreviewError::UnsupportedText);
     }
     let document = pdfium
@@ -27,7 +76,9 @@ pub(crate) fn translate(
         .map_err(|_| PreviewError::InvalidPage)?;
     let mut before = text::extract(&document, &page, &config);
     layout::reconstruct(&page, &config, &mut before);
-    let ids: BTreeSet<usize> = if let Some(id) = group {
+    let ids: BTreeSet<usize> = if let Some(ids) = explicit_ids {
+        ids.iter().copied().collect()
+    } else if let Some(id) = group {
         let g = before
             .groups
             .iter()
@@ -56,6 +107,28 @@ pub(crate) fn translate(
     if ids.is_empty() {
         return Err(PreviewError::UnsupportedText);
     }
+    if explicit_ids.is_some() {
+        let selected: Vec<_> = before
+            .objects
+            .iter()
+            .filter(|o| ids.contains(&o.id))
+            .collect();
+        if selected.len() != ids.len() {
+            return Err(PreviewError::StaleObject);
+        }
+        let x = selected
+            .iter()
+            .flat_map(|o| o.bounds)
+            .map(|p| p[0])
+            .fold(f32::INFINITY, f32::min);
+        let y = selected
+            .iter()
+            .flat_map(|o| o.bounds)
+            .map(|p| p[1])
+            .fold(f32::NEG_INFINITY, f32::max);
+        m[4] = x * (1.0 - m[0]);
+        m[5] = y * (1.0 - m[3]);
+    }
     let mut regions = Vec::new();
     // width()/height() describe the rotated display. Object matrices are in
     // unrotated PDF coordinates, including nonzero MediaBox/CropBox origins.
@@ -81,7 +154,11 @@ pub(crate) fn translate(
         let mut old_pixels = Vec::new();
         let mut new_pixels = Vec::new();
         for [x, y] in o.bounds {
-            if x + dx < left || y + dy < bottom || x + dx > right || y + dy > top {
+            if m[0] * x + m[4] < left
+                || m[3] * y + m[5] < bottom
+                || m[0] * x + m[4] > right
+                || m[3] * y + m[5] > top
+            {
                 return Err(PreviewError::TextOverflow);
             }
             old_pixels.push(
@@ -89,8 +166,12 @@ pub(crate) fn translate(
                     .map_err(|_| PreviewError::EditFailed)?,
             );
             new_pixels.push(
-                page.points_to_pixels(PdfPoints::new(x + dx), PdfPoints::new(y + dy), &config)
-                    .map_err(|_| PreviewError::EditFailed)?,
+                page.points_to_pixels(
+                    PdfPoints::new(m[0] * x + m[4]),
+                    PdfPoints::new(m[3] * y + m[5]),
+                    &config,
+                )
+                .map_err(|_| PreviewError::EditFailed)?,
             );
         }
         for points in [old_pixels, new_pixels] {
@@ -103,7 +184,7 @@ pub(crate) fn translate(
         }
     }
     drop(page);
-    let bytes = crate::move_stream::translate(original, index, &before.objects, &ids, dx, dy)?;
+    let bytes = crate::move_stream::transform(original, index, &before.objects, &ids, m)?;
     let reopened = pdfium
         .load_pdf_from_byte_vec(bytes.clone(), None)
         .map_err(|_| PreviewError::VerificationFailed)?;
@@ -145,11 +226,15 @@ pub(crate) fn translate(
                     || a.font != b.font
                     || a.font_size != b.font_size
                     || a.color != b.color
-                    || a.matrix[..4] != b.matrix[..4]
-                    || (a.matrix[4] + dx - b.matrix[4]).abs() > 0.01
-                    || (a.matrix[5] + dy - b.matrix[5]).abs() > 0.01
+                    || (a.matrix[0] * m[0] - b.matrix[0]).abs() > 0.01
+                    || (a.matrix[1] * m[3] - b.matrix[1]).abs() > 0.01
+                    || (a.matrix[2] * m[0] - b.matrix[2]).abs() > 0.01
+                    || (a.matrix[3] * m[3] - b.matrix[3]).abs() > 0.01
+                    || (a.matrix[4] * m[0] + m[4] - b.matrix[4]).abs() > 0.01
+                    || (a.matrix[5] * m[3] + m[5] - b.matrix[5]).abs() > 0.01
                     || a.bounds.iter().zip(b.bounds).any(|(p, q)| {
-                        (p[0] + dx - q[0]).abs() > 0.02 || (p[1] + dy - q[1]).abs() > 0.02
+                        (p[0] * m[0] + m[4] - q[0]).abs() > 0.02
+                            || (p[1] * m[3] + m[5] - q[1]).abs() > 0.02
                     }))
             {
                 return Err(PreviewError::VerificationFailed);

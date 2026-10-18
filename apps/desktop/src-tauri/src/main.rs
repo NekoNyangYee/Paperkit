@@ -41,6 +41,7 @@ fn main() {
             preview::list_fonts,
             preview::editor_font,
             preview::document_font,
+            preview::copy_graphic,
             preview::import_original_font,
             preview::editing_background,
             preview::release_preview

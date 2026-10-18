@@ -15,6 +15,25 @@ pub struct Paperframe {
 }
 
 impl Paperframe {
+    pub fn copy_graphic(
+        &self,
+        id: String,
+        revision: u64,
+        page: i32,
+        object: usize,
+    ) -> Result<Vec<u8>, PreviewError> {
+        let (reply, receiver) = mpsc::sync_channel(1);
+        self.sender
+            .send(Request::CopyGraphic {
+                id,
+                revision,
+                page,
+                object,
+                reply,
+            })
+            .map_err(|_| PreviewError::WorkerStopped)?;
+        receiver.recv().map_err(|_| PreviewError::WorkerStopped)?
+    }
     pub fn start(library: PathBuf) -> Result<Self, PreviewError> {
         Self::start_with_fonts(library, PathBuf::new())
     }

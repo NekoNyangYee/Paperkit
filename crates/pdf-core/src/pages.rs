@@ -139,7 +139,7 @@ pub(crate) fn edit(
     Ok(output)
 }
 
-fn unchanged_page(before: &Document, after: &Document, old: u32, new: u32) -> bool {
+pub(crate) fn unchanged_page(before: &Document, after: &Document, old: u32, new: u32) -> bool {
     let check = || -> Option<bool> {
         let a = *before.get_pages().get(&old)?;
         let b = *after.get_pages().get(&new)?;

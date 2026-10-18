@@ -24,7 +24,7 @@ fn render_page_layer(
         .pages()
         .get(index)
         .map_err(|_| PreviewError::InvalidPage)?;
-    render_loaded_page(document, &page, index, width, transparent)
+    render_loaded_page(document, &page, index, width, transparent, true)
 }
 
 pub(super) fn render_loaded_page(
@@ -33,6 +33,7 @@ pub(super) fn render_loaded_page(
     index: i32,
     width: i32,
     transparent: bool,
+    include_text: bool,
 ) -> Result<RenderedPage, PreviewError> {
     let page_count = document.pages().len();
     let config = PdfRenderConfig::new()
@@ -48,7 +49,7 @@ pub(super) fn render_loaded_page(
     let bitmap = page
         .render_with_config(&config)
         .map_err(|_| PreviewError::RenderFailed)?;
-    let reconstruct_layout = width > 300;
+    let reconstruct_layout = include_text && width > 300;
     let width = bitmap.width() as u32;
     let height = bitmap.height() as u32;
     let rgba = bitmap.as_rgba_bytes();
