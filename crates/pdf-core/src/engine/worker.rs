@@ -3,7 +3,7 @@ use super::{
     protocol::Request,
     raster::{render_loaded_page, render_page},
 };
-use crate::{editing::History, error::EngineError as PreviewError};
+use crate::{editing::History, engine::error::EngineError as PreviewError};
 use pdfium_render::prelude::*;
 use std::{fs::File, io::Read, path::PathBuf, sync::mpsc::Receiver};
 const MAX_FILE_BYTES: u64 = 128 * 1024 * 1024;
@@ -12,6 +12,7 @@ pub(super) fn run(library: PathBuf, font_directory: PathBuf, receiver: Receiver<
     // This local lives after Pdfium and drops before it: no self-referential struct.
     let mut current: Option<(String, PdfDocument<'_>)> = None;
     let mut history = History::default();
+    let mut watermark_pages = Vec::new();
     while let Ok(request) = receiver.recv() {
         match request {
             Request::CopyGraphic {
@@ -32,7 +33,7 @@ pub(super) fn run(library: PathBuf, font_directory: PathBuf, receiver: Receiver<
                     if history.state.revision != revision {
                         return Err(PreviewError::StaleObject);
                     }
-                    crate::graphics::copy(pdfium, document, page, object)
+                    crate::editing::graphics::copy(pdfium, document, page, object)
                 })();
                 let _ = reply.send(result);
             }
@@ -168,7 +169,10 @@ pub(super) fn run(library: PathBuf, font_directory: PathBuf, receiver: Receiver<
                         .as_mut()
                         .filter(|(active, _)| *active == id)
                         .ok_or(PreviewError::StaleObject)?;
-                    history.apply(pdfium, document, revision, action, &font_directory)
+                    let state =
+                        history.apply(pdfium, document, revision, action, &font_directory)?;
+                    watermark_pages = history.watermark_pages();
+                    Ok(state)
                 })();
                 let _ = reply.send(result);
             }
@@ -183,6 +187,7 @@ pub(super) fn run(library: PathBuf, font_directory: PathBuf, receiver: Receiver<
                 path,
                 page,
                 width,
+                include_text,
                 progress,
                 reply,
             } => {
@@ -207,6 +212,7 @@ pub(super) fn run(library: PathBuf, font_directory: PathBuf, receiver: Receiver<
                         if bytes.len() as u64 > MAX_FILE_BYTES {
                             return Err(PreviewError::TooLarge);
                         }
+                        watermark_pages = crate::content_stream::watermarks::pages(&bytes);
                         let document =
                             pdfium
                                 .load_pdf_from_byte_vec(bytes, None)
@@ -232,12 +238,19 @@ pub(super) fn run(library: PathBuf, font_directory: PathBuf, receiver: Receiver<
                         if let Some(progress) = &progress {
                             progress(40);
                         }
-                        render_page(&current.as_ref().unwrap().1, page, width)?
+                        render_page(&current.as_ref().unwrap().1, page, width, include_text)?
                     };
                     if let Some(progress) = &progress {
                         progress(85);
                     }
                     rendered.state = history.state.clone();
+                    if include_text {
+                        rendered.text.watermark_pages = watermark_pages.clone();
+                        if watermark_pages.contains(&page) {
+                            rendered.text.watermark_objects =
+                                history.watermark_objects(&current.as_ref().unwrap().1, page)?;
+                        }
+                    }
                     Ok(rendered)
                 })();
                 let _ = reply.send(result);

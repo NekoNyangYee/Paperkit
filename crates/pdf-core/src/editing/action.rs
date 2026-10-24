@@ -15,6 +15,9 @@ pub struct EditState {
 #[derive(Deserialize)]
 #[serde(tag = "kind", rename_all = "camelCase")]
 pub enum EditAction {
+    RemoveWatermark {
+        page: Option<i32>,
+    },
     ScaleText {
         page: i32,
         objects: Vec<usize>,
@@ -29,9 +32,19 @@ pub enum EditAction {
         page: i32,
         png: Vec<u8>,
     },
+    AddSignature {
+        page: i32,
+        png: Vec<u8>,
+    },
+    AddWatermark {
+        page: Option<i32>,
+        png: Vec<u8>,
+        #[serde(rename = "widthRatio")]
+        width_ratio: f32,
+    },
     Page {
         page: i32,
-        operation: crate::pages::PageOperation,
+        operation: crate::document::pages::PageOperation,
         destination: Option<i32>,
     },
     TransformGraphic {
@@ -47,7 +60,7 @@ pub enum EditAction {
         page: i32,
         groups: Vec<usize>,
         text: Option<String>,
-        alignment: crate::alignment::Alignment,
+        alignment: crate::text::alignment::Alignment,
         width: Option<f32>,
         height: Option<f32>,
         font: Option<String>,

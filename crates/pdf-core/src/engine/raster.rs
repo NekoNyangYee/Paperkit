@@ -1,20 +1,12 @@
 //! Bitmap, PNG and text geometry production; no history or queue ownership.
 use super::RenderedPage;
-use crate::{editing::EditState, error::EngineError as PreviewError, text};
+use crate::{editing::EditState, engine::error::EngineError as PreviewError, text};
 use pdfium_render::prelude::*;
 pub(super) fn render_page(
     document: &PdfDocument<'_>,
     index: i32,
     width: i32,
-) -> Result<RenderedPage, PreviewError> {
-    render_page_layer(document, index, width, false)
-}
-
-fn render_page_layer(
-    document: &PdfDocument<'_>,
-    index: i32,
-    width: i32,
-    transparent: bool,
+    include_text: bool,
 ) -> Result<RenderedPage, PreviewError> {
     let page_count = document.pages().len();
     if index < 0 || index >= page_count {
@@ -24,7 +16,7 @@ fn render_page_layer(
         .pages()
         .get(index)
         .map_err(|_| PreviewError::InvalidPage)?;
-    render_loaded_page(document, &page, index, width, transparent, true)
+    render_loaded_page(document, &page, index, width, false, include_text)
 }
 
 pub(super) fn render_loaded_page(
@@ -49,7 +41,6 @@ pub(super) fn render_loaded_page(
     let bitmap = page
         .render_with_config(&config)
         .map_err(|_| PreviewError::RenderFailed)?;
-    let reconstruct_layout = include_text && width > 300;
     let width = bitmap.width() as u32;
     let height = bitmap.height() as u32;
     let rgba = bitmap.as_rgba_bytes();
@@ -103,14 +94,12 @@ pub(super) fn render_loaded_page(
         width,
         height,
         png,
-        text: if !reconstruct_layout || transparent {
+        text: if !include_text || transparent {
             // Thumbnails and transparent drag layers never expose text tools.
             text::PageText::default()
         } else {
             let mut text = text::extract(document, &page, &config);
-            if reconstruct_layout {
-                crate::layout::reconstruct(&page, &config, &mut text);
-            }
+            crate::text::layout::reconstruct(&page, &config, &mut text);
             text
         },
         state: EditState::default(),

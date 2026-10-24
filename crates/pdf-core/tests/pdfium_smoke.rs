@@ -189,6 +189,12 @@ fn native_load_render_navigate_cache_release_and_errors() {
     ));
     assert_eq!(fs::read(&path).unwrap(), original);
     assert!(first.text.objects.is_empty());
+    let minimum_graphic = engine.render("one".into(), path.clone(), 0, 300).unwrap();
+    assert!(minimum_graphic
+        .text
+        .graphics
+        .iter()
+        .any(|object| object.kind == "path"));
     fs::write(&path, b"%PDF-1.7\nnot a document").unwrap();
     assert!(engine.render("one".into(), path.clone(), 0, 600).is_ok()); // owned byte snapshot
     engine.release("one".into()).unwrap();
@@ -213,13 +219,37 @@ fn native_load_render_navigate_cache_release_and_errors() {
         .render("edit".into(), source.clone(), 0, 800)
         .unwrap();
     assert_eq!(first.text.objects.len(), 2);
+    // A 300px editor page must retain tools even after a same-size thumbnail request.
+    let thumbnail = engine
+        .render_thumbnail("edit".into(), source.clone(), 0, 300)
+        .unwrap();
+    assert!(thumbnail.text.objects.is_empty());
+    assert!(thumbnail.text.groups.is_empty());
+    let minimum = engine
+        .render("edit".into(), source.clone(), 0, 300)
+        .unwrap();
+    assert_eq!(minimum.png, thumbnail.png);
+    assert_eq!(minimum.text.objects.len(), first.text.objects.len());
+    assert_eq!(minimum.text.groups.len(), first.text.groups.len());
+    assert_eq!(minimum.text.warning, first.text.warning);
+    for (small, full) in minimum.text.objects.iter().zip(&first.text.objects) {
+        assert_eq!(small.id, full.id);
+        assert_eq!(small.text, full.text);
+        assert_eq!(small.bounds, full.bounds);
+        assert_eq!(small.edit_blocked, full.edit_blocked);
+    }
+    let large_thumbnail = engine
+        .render_thumbnail("edit".into(), source.clone(), 0, 800)
+        .unwrap();
+    assert!(large_thumbnail.text.objects.is_empty());
+    assert_eq!(large_thumbnail.png, first.png);
     let text = &first.text.objects[0];
     assert_eq!(text.text, "Hello World");
     assert_eq!(text.font_size, 16.0);
     assert_eq!(text.color, [51, 77, 102, 255]);
     assert_eq!(text.edit_blocked, None, "font {}", text.font);
     // CropBox and Rotate are mapped using the exact same PDFium render configuration.
-    for width in [400, 800, 1600] {
+    for width in [300, 400, 800, 1600] {
         let rotated = engine
             .render("edit".into(), source.clone(), 1, width)
             .unwrap();

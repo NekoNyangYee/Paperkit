@@ -1,5 +1,5 @@
 //! Object and group replacement; successful output has passed preservation checks.
-use crate::{error::EngineError as PreviewError, text};
+use crate::{engine::error::EngineError as PreviewError, text};
 use pdfium_render::prelude::*;
 use std::path::Path;
 
@@ -21,7 +21,7 @@ pub(super) fn replace_group(
         .set_target_width(800)
         .set_maximum_height(2200);
     let mut text = crate::text::extract(&document, &page, &config);
-    crate::layout::reconstruct(&page, &config, &mut text);
+    crate::text::layout::reconstruct(&page, &config, &mut text);
     let group = text
         .groups
         .iter()
@@ -38,7 +38,7 @@ pub(super) fn replace_group(
         })
     {
         let ids = group.runs.iter().map(|run| run.object).collect();
-        return crate::flow::delete_text(pdfium, original, index, &ids);
+        return crate::editing::flow::delete_text(pdfium, original, index, &ids);
     }
     if group.edit_blocked.is_some() {
         return Err(PreviewError::UnsupportedText);
@@ -157,7 +157,7 @@ pub(super) fn replace_group(
         .get(index)
         .map_err(|_| PreviewError::VerificationFailed)?;
     let mut rebuilt = crate::text::extract(&verified, &page, &config);
-    crate::layout::reconstruct(&page, &config, &mut rebuilt);
+    crate::text::layout::reconstruct(&page, &config, &mut rebuilt);
     if !rebuilt
         .groups
         .iter()
@@ -189,7 +189,7 @@ fn replace_with_bounds(
     cell: Option<[f32; 4]>,
 ) -> Result<Vec<u8>, PreviewError> {
     if value.is_some_and(|text| text.trim().is_empty()) {
-        return crate::flow::delete_text(
+        return crate::editing::flow::delete_text(
             pdfium,
             original,
             index,
@@ -363,7 +363,7 @@ fn replace_with_bounds(
     let bytes = candidate
         .save_to_bytes()
         .map_err(|_| PreviewError::EditFailed)?;
-    let bytes = crate::text_spacing::preserve(
+    let bytes = crate::content_stream::text_spacing::preserve(
         pdfium,
         original,
         bytes,

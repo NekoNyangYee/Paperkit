@@ -1,6 +1,7 @@
 //! Paperframe: local PDF editing with verified changes.
 //! The client sends owned data to one worker. Only that worker owns native handles.
 mod client;
+pub mod error;
 mod protocol;
 mod raster;
 mod worker;

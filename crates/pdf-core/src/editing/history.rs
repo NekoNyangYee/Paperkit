@@ -1,6 +1,6 @@
 //! Atomic commit, revision checks, undo/redo and save state.
 use super::action::{EditAction, EditState};
-use crate::error::EngineError as PreviewError;
+use crate::engine::error::EngineError as PreviewError;
 use pdfium_render::prelude::*;
 use std::path::Path;
 #[derive(Default)]
@@ -13,6 +13,46 @@ pub(crate) struct History {
 }
 
 impl History {
+    pub fn watermark_objects(
+        &self,
+        document: &PdfDocument<'_>,
+        index: i32,
+    ) -> Result<Vec<usize>, PreviewError> {
+        let saved;
+        let bytes = match self.bytes.as_deref() {
+            Some(bytes) => bytes,
+            None => {
+                saved = document
+                    .save_to_bytes()
+                    .map_err(|_| PreviewError::RenderFailed)?;
+                &saved
+            }
+        };
+        let (marked, count) = crate::content_stream::watermarks::draws(bytes, index)?;
+        let page = document
+            .pages()
+            .get(index)
+            .map_err(|_| PreviewError::InvalidPage)?;
+        let draws: Vec<_> = page
+            .objects()
+            .iter()
+            .enumerate()
+            .filter(|(_, object)| {
+                object.as_image_object().is_some() || object.as_x_object_form_object().is_some()
+            })
+            .map(|(id, _)| id)
+            .collect();
+        if draws.len() != count {
+            return Err(PreviewError::VerificationFailed);
+        }
+        Ok(marked.into_iter().map(|ordinal| draws[ordinal]).collect())
+    }
+    pub fn watermark_pages(&self) -> Vec<i32> {
+        self.bytes
+            .as_deref()
+            .map(crate::content_stream::watermarks::pages)
+            .unwrap_or_default()
+    }
     pub fn apply<'a>(
         &mut self,
         pdfium: &'a Pdfium,
@@ -36,13 +76,21 @@ impl History {
         }
         match action {
             EditAction::Save { path } => {
-                crate::save::save_new(pdfium, document, self.bytes.as_ref().unwrap(), &path)?;
+                crate::document::save::save_new(
+                    pdfium,
+                    document,
+                    self.bytes.as_ref().unwrap(),
+                    &path,
+                )?;
                 self.saved = self.bytes.clone();
             }
             action @ (EditAction::Page { .. }
             | EditAction::ScaleText { .. }
             | EditAction::PasteGraphic { .. }
             | EditAction::PasteImage { .. }
+            | EditAction::AddSignature { .. }
+            | EditAction::AddWatermark { .. }
+            | EditAction::RemoveWatermark { .. }
             | EditAction::TransformGraphic { .. }
             | EditAction::DeleteGraphic { .. }
             | EditAction::AlignBlock { .. }
@@ -64,6 +112,9 @@ impl History {
                 )?;
                 if bytes.len() > 32 * 1024 * 1024 {
                     return Err(PreviewError::EditTooLarge);
+                }
+                if self.bytes.as_deref() == Some(bytes.as_slice()) {
+                    return Ok(self.state.clone());
                 }
                 let candidate = pdfium
                     .load_pdf_from_byte_vec(bytes.clone(), None)

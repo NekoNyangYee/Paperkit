@@ -1,6 +1,6 @@
 {
   "name": "paperkit",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "private": true,
   "packageManager": "pnpm@10.28.1",
   "engines": {
@@ -14,6 +14,7 @@
     "test:layout": "cargo test -p pdf-core --test layout_smoke -- --ignored --nocapture",
     "setup:fonts": "node scripts/setup-fonts.mjs",
     "test:fonts": "node scripts/test-native.mjs fonts_smoke",
+    "test:stamps": "cargo test -p pdf-core --locked --test stamps_smoke -- --ignored",
     "setup:pdfium": "node scripts/setup-pdfium.mjs",
     "test:pdfium": "cargo test -p pdf-core --test pdfium_smoke -- --ignored",
     "test:web": "pnpm --filter @paperkit/desktop test",

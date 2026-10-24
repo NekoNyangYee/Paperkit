@@ -2,7 +2,7 @@
 use super::{protocol::Request, RenderedPage};
 use crate::{
     editing::{EditAction, EditState},
-    error::EngineError as PreviewError,
+    engine::error::EngineError as PreviewError,
 };
 use std::{
     path::PathBuf,
@@ -42,7 +42,7 @@ impl Paperframe {
         library: PathBuf,
         font_directory: PathBuf,
     ) -> Result<Self, PreviewError> {
-        crate::system_fonts::register_bundled(&font_directory);
+        crate::fonts::system::register_bundled(&font_directory);
         let (sender, receiver) = mpsc::sync_channel(4);
         std::thread::Builder::new()
             .name("paperframe-pdfium".into())
@@ -163,6 +163,29 @@ impl Paperframe {
         width: i32,
         progress: Option<Box<dyn Fn(u8) + Send>>,
     ) -> Result<RenderedPage, PreviewError> {
+        self.request_render(id, path, page, width, true, progress)
+    }
+
+    /// Bitmap-only preview. Resolution never determines whether editing data is included.
+    pub fn render_thumbnail(
+        &self,
+        id: String,
+        path: PathBuf,
+        page: i32,
+        width: i32,
+    ) -> Result<RenderedPage, PreviewError> {
+        self.request_render(id, path, page, width, false, None)
+    }
+
+    fn request_render(
+        &self,
+        id: String,
+        path: PathBuf,
+        page: i32,
+        width: i32,
+        include_text: bool,
+        progress: Option<Box<dyn Fn(u8) + Send>>,
+    ) -> Result<RenderedPage, PreviewError> {
         if !(300..=1600).contains(&width) {
             return Err(PreviewError::RenderFailed);
         }
@@ -173,6 +196,7 @@ impl Paperframe {
                 path,
                 page,
                 width,
+                include_text,
                 progress,
                 reply,
             })

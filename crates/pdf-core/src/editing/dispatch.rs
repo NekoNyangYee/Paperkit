@@ -3,7 +3,7 @@ use super::{
     action::EditAction,
     replace::{replace, replace_group},
 };
-use crate::error::EngineError as PreviewError;
+use crate::engine::error::EngineError as PreviewError;
 use pdfium_render::prelude::*;
 use std::path::Path;
 pub(super) fn apply(
@@ -13,30 +13,39 @@ pub(super) fn apply(
     font_directory: &Path,
 ) -> Result<Vec<u8>, PreviewError> {
     Ok(match action {
+        EditAction::RemoveWatermark { page } => super::stamps::remove(pdfium, original, page)?,
         EditAction::ScaleText {
             page,
             objects,
             sx,
             sy,
-        } => crate::movement::scale(pdfium, original, page, &objects, sx, sy)?,
+        } => crate::editing::movement::scale(pdfium, original, page, &objects, sx, sy)?,
         EditAction::PasteGraphic { page, source } => {
-            crate::graphics::paste(pdfium, original, page, &source)?
+            crate::editing::graphics::paste(pdfium, original, page, &source)?
         }
         EditAction::PasteImage { page, png } => {
-            crate::graphics::paste_image(pdfium, original, page, &png)?
+            crate::editing::graphics::paste_image(pdfium, original, page, &png)?
         }
+        EditAction::AddSignature { page, png } => {
+            super::stamps::insert(pdfium, original, Some(page), &png, None)?
+        }
+        EditAction::AddWatermark {
+            page,
+            png,
+            width_ratio,
+        } => super::stamps::insert(pdfium, original, page, &png, Some(width_ratio))?,
         EditAction::Page {
             page,
             operation,
             destination,
-        } => crate::pages::edit(pdfium, original, page, operation, destination)?,
+        } => crate::document::pages::edit(pdfium, original, page, operation, destination)?,
         EditAction::TransformGraphic {
             page,
             object,
             matrix,
-        } => crate::graphics::edit(pdfium, original, page, object, Some(matrix))?,
+        } => crate::editing::graphics::edit(pdfium, original, page, object, Some(matrix))?,
         EditAction::DeleteGraphic { page, object } => {
-            crate::graphics::edit(pdfium, original, page, object, None)?
+            crate::editing::graphics::edit(pdfium, original, page, object, None)?
         }
         EditAction::AlignBlock {
             page,
@@ -46,7 +55,7 @@ pub(super) fn apply(
             width,
             height,
             font,
-        } => crate::flow::replace_with_fonts(
+        } => crate::editing::flow::replace_with_fonts(
             pdfium,
             original,
             page,
@@ -81,7 +90,7 @@ pub(super) fn apply(
                     Some((font_directory, &fonts[&object])),
                 )?
             } else {
-                crate::flow::replace_with_fonts(
+                crate::editing::flow::replace_with_fonts(
                     pdfium,
                     original,
                     page,
@@ -102,7 +111,7 @@ pub(super) fn apply(
             text,
             width,
             height,
-        } => crate::flow::replace(
+        } => crate::editing::flow::replace(
             pdfium,
             original,
             page,
@@ -119,7 +128,7 @@ pub(super) fn apply(
             text,
             width,
             height,
-        } => crate::flow::replace(
+        } => crate::editing::flow::replace(
             pdfium,
             original,
             page,
@@ -135,7 +144,7 @@ pub(super) fn apply(
             group: Some(group),
             object: None,
             text,
-        } => crate::block::replace(
+        } => crate::editing::block::replace(
             pdfium,
             original,
             page,
@@ -163,9 +172,9 @@ pub(super) fn apply(
             object,
             dx,
             dy,
-        } => crate::movement::translate(pdfium, original, page, group, object, dx, dy)?,
+        } => crate::editing::movement::translate(pdfium, original, page, group, object, dx, dy)?,
         EditAction::ReflowBlock { page, group, text } => {
-            crate::block::replace(pdfium, original, page, group, Some(&text), None)?
+            crate::editing::block::replace(pdfium, original, page, group, Some(&text), None)?
         }
         EditAction::ChangeBlockFont {
             page,
@@ -174,7 +183,7 @@ pub(super) fn apply(
             text,
             width,
             height,
-        } => crate::flow::replace(
+        } => crate::editing::flow::replace(
             pdfium,
             original,
             page,

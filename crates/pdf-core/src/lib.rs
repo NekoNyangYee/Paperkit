@@ -2,34 +2,18 @@
 //!
 //! PDFium and documents stay on a dedicated worker; native handles never cross IPC.
 
-mod block;
+mod compat;
+mod content_stream;
 pub mod document;
-pub mod edit;
-mod flow;
-mod flow_followers;
-mod flow_lines;
-mod font_recovery;
-pub mod fonts;
-mod graphics;
-pub mod layout;
-mod movement;
-pub mod pages;
-pub mod render;
-mod save;
-pub mod selection;
-mod system_fonts;
-pub mod text;
-
-mod move_stream;
-mod text_patch;
-mod text_spacing;
-mod verification;
-
-pub mod alignment;
-
 mod editing;
 pub mod engine;
-pub mod error;
-pub use engine::Paperframe;
+pub mod fonts;
+pub mod text;
+
+// Preserve existing public module paths for downstream consumers.
+pub use compat::{edit, render};
+pub use document::{pages, selection};
+pub use engine::{error, Paperframe};
 pub use error::EngineError;
+pub use text::{alignment, layout};
 pub const ENGINE_NAME: &str = "Paperframe";

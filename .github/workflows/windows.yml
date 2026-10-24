@@ -63,6 +63,8 @@ jobs:
         run: pnpm test:pdfium
       - name: PDF edit, movement and alignment integration
         run: pnpm test:corpus
+      - name: Watermark and signature integration
+        run: pnpm test:stamps
       - name: Original font recovery integration
         run: cargo test -p pdf-core --locked recovers_embedded_cmap_and_edits_without_installed_original -- --ignored --nocapture
       - name: Font change and save integration

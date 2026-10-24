@@ -2,7 +2,7 @@
 use super::RenderedPage;
 use crate::{
     editing::{EditAction, EditState},
-    error::EngineError as PreviewError,
+    engine::error::EngineError as PreviewError,
 };
 use std::{path::PathBuf, sync::mpsc::SyncSender};
 pub(super) enum Request {
@@ -41,6 +41,7 @@ pub(super) enum Request {
         path: PathBuf,
         page: i32,
         width: i32,
+        include_text: bool,
         progress: Option<Box<dyn Fn(u8) + Send>>,
         reply: SyncSender<Result<RenderedPage, PreviewError>>,
     },
