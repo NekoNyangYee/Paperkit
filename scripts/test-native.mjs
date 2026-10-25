@@ -3,7 +3,7 @@ import { spawnSync } from "node:child_process";
 const target = process.argv[2];
 if (!["corpus_smoke", "fonts_smoke"].includes(target))
   throw new Error("Unknown native test target");
-const args = ["test", "-p", "pdf-core", "--test", target];
+const args = ["test", "-p", "pdf-core", "--locked", "--test", target];
 const listing = spawnSync("cargo", [...args, "--", "--ignored", "--list"], { encoding: "utf8" });
 if (listing.error) throw listing.error;
 if (listing.status !== 0) {

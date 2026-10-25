@@ -1,0 +1,18 @@
+name: Setup native PDF resources
+description: Cache downloads and verify PDFium and bundled font checksums.
+runs:
+  using: composite
+  steps:
+    - uses: actions/cache@v4
+      with:
+        path: |
+          .cache/pdfium-win-x64.tgz
+          .cache/pdfium-7881
+          .cache/fonts
+        key: native-windows-x64-v2-${{ hashFiles('scripts/*manifest.json') }}
+    - name: Download and verify native resources
+      shell: pwsh
+      run: |
+        node scripts/setup-pdfium.mjs
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        node scripts/setup-fonts.mjs

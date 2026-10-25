@@ -9,65 +9,91 @@ on:
 permissions:
   contents: read
 
+defaults:
+  run:
+    shell: pwsh
+
 concurrency:
   group: windows-${{ github.ref }}
   cancel-in-progress: ${{ github.event_name == 'pull_request' }}
 
 jobs:
-  build:
+  checks:
+    name: Format, versions and release tooling
     runs-on: windows-2022
-    timeout-minutes: 60
-    defaults:
-      run:
-        shell: pwsh
-    env:
-      CARGO_TERM_COLOR: always
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
-      - uses: pnpm/action-setup@v4
-      - uses: actions/setup-node@v4
-        with:
-          node-version: "22"
-          cache: pnpm
+      - uses: ./.github/actions/setup-node
       - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt
-      - uses: Swatinem/rust-cache@v2
-      - uses: actions/cache@v4
-        with:
-          path: .cache
-          key: native-windows-x64-${{ hashFiles('scripts/*manifest.json') }}
-      - name: Install JavaScript dependencies
-        run: pnpm install --frozen-lockfile
       - name: Check versions
         run: node scripts/version.mjs
       - name: Release tooling tests
         run: |
           $env:PAPERKIT_TEST_POWERSHELL = (Get-Process -Id $PID).Path
           node --test scripts/version.test.mjs scripts/release.test.mjs
-      - name: Download and verify native resources
-        run: |
-          pnpm setup:pdfium
-          if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
-          pnpm setup:fonts
       - name: Format check
         run: pnpm format:check
-      - name: Frontend tests
-        run: pnpm test:web
-      - name: Rust tests
-        run: cargo test --workspace --locked
-      - name: PDFium integration
-        run: pnpm test:pdfium
-      - name: PDF edit, movement and alignment integration
-        run: pnpm test:corpus
-      - name: Watermark and signature integration
-        run: pnpm test:stamps
-      - name: Original font recovery integration
-        run: cargo test -p pdf-core --locked recovers_embedded_cmap_and_edits_without_installed_original -- --ignored --nocapture
-      - name: Font change and save integration
-        run: cargo test -p pdf-core --locked --test fonts_smoke block_font_change_reflows_beyond_original_height_and_saves -- --ignored --nocapture
+
+  frontend-tests:
+    name: Frontend / ${{ matrix.suite }}
+    runs-on: windows-2022
+    timeout-minutes: 10
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [unit, integration]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node
+      - name: Run frontend tests
+        run: pnpm test:web:${{ matrix.suite }}
+
+  rust-tests:
+    name: Rust / ${{ matrix.suite }}
+    runs-on: windows-2022
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        suite: [unit, integration]
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node
+        with:
+          install: "false"
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+        with:
+          shared-key: tests-${{ matrix.suite }}
+      - uses: ./.github/actions/setup-native
+      - name: Run Rust tests
+        run: pnpm test:rust:${{ matrix.suite }}
+
+  build:
+    name: Windows installer
+    runs-on: windows-2022
+    timeout-minutes: 45
+    env:
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+      - uses: ./.github/actions/setup-node
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: Swatinem/rust-cache@v2
+      - uses: ./.github/actions/setup-native
       - name: Build Windows installer
         working-directory: apps/desktop
         run: node node_modules/@tauri-apps/cli/tauri.js build --ci --bundles nsis -- --locked
@@ -87,7 +113,8 @@ jobs:
           retention-days: 14
 
   release:
-    needs: build
+    name: Publish release
+    needs: [checks, frontend-tests, rust-tests, build]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'NekoNyangYee/Paperkit'
     runs-on: windows-2022
     timeout-minutes: 10
