@@ -27,9 +27,12 @@ if ($null -ne $existing) {
     exit 0
 }
 
-$tagCommit = Get-GitHubObject "repos/$env:GH_REPO/commits/$tag"
-if ($null -ne $tagCommit -and $tagCommit.sha -ne $Commit) {
-    throw "$tag points to a different commit; refusing to publish unrelated assets."
+$tagRef = Get-GitHubObject "repos/$env:GH_REPO/git/ref/tags/$tag"
+if ($null -ne $tagRef) {
+    $tagCommit = Get-GitHubObject "repos/$env:GH_REPO/commits/$tag"
+    if ($null -eq $tagCommit -or $tagCommit.sha -ne $Commit) {
+        throw "$tag points to a different commit; refusing to publish unrelated assets."
+    }
 }
 $installer = Join-Path $AssetsPath "Paperkit_${version}_x64-setup.exe"
 $checksums = Join-Path $AssetsPath 'SHA256SUMS.txt'

@@ -44,7 +44,9 @@ jobs:
       - name: Check versions
         run: node scripts/version.mjs
       - name: Release tooling tests
-        run: node --test scripts/version.test.mjs scripts/release.test.mjs
+        run: |
+          $env:PAPERKIT_TEST_POWERSHELL = (Get-Process -Id $PID).Path
+          node --test scripts/version.test.mjs scripts/release.test.mjs
       - name: Download and verify native resources
         run: |
           pnpm setup:pdfium

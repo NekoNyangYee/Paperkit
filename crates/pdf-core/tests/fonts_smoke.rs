@@ -509,7 +509,7 @@ fn installed_exact_face_is_used_and_missing_face_never_auto_replaced() {
                 .unwrap();
             assert_eq!(
                 engine
-                    .render("reopened".into(), output, 0, 800)
+                    .render(format!("{id}-reopened"), output, 0, 800)
                     .unwrap()
                     .png,
                 changed.png
@@ -1025,7 +1025,7 @@ fn bundled_fonts_change_undo_save_reopen() {
             .png,
         before.png
     );
-    // Start a fresh document session for the explicit font-change regression.
+    // Opening another tab preserves this document's revision and history.
     engine
         .render(
             "unsupported-explicit".into(),
@@ -1034,9 +1034,17 @@ fn bundled_fonts_change_undo_save_reopen() {
             800,
         )
         .unwrap();
-    engine
+    let resumed = engine
         .render("unsupported".into(), unsupported_path.clone(), 0, 800)
         .unwrap();
+    assert_eq!(resumed.state.revision, 4);
+    assert_eq!(resumed.png, before.png);
+    // Explicitly close and reopen to reset the session for the next regression.
+    engine.release("unsupported".into()).unwrap();
+    let fresh = engine
+        .render("unsupported".into(), unsupported_path.clone(), 0, 800)
+        .unwrap();
+    assert_eq!(fresh.state.revision, 0);
     engine
         .edit(
             "unsupported".into(),
