@@ -6,7 +6,7 @@ struct Change {
     page: i32,
     count: usize,
     region: [[i32; 2]; 4],
-    objects: Vec<text::TextObject>,
+    matrix: [f32; 6],
 }
 
 // None for width_ratio inserts a signature with a 144 × 72 pt bounding box.
@@ -52,16 +52,14 @@ pub(super) fn insert(
     let config = PdfRenderConfig::new()
         .set_target_width(800)
         .set_maximum_height(2200);
+    let (image_width, image_height, pixels) = super::graphics::png_pixels(png)?;
+    let aspect = image_width as f32 / image_height as f32;
     let mut changes = Vec::with_capacity(targets.len());
     for index in targets {
-        let mut object = super::graphics::image_from_png(&document, png)?;
-        let mut page = document
+        let page = document
             .pages()
             .get(index)
             .map_err(|_| EngineError::InvalidPage)?;
-        let before = text::extract_for_verification(&document, &page, &config);
-        let bounds = object.bounds().map_err(|_| EngineError::EditFailed)?;
-        let aspect = bounds.width().value / bounds.height().value;
         let bitmap = page
             .render_with_config(&config)
             .map_err(|_| EngineError::EditFailed)?;
@@ -92,50 +90,33 @@ pub(super) fn insert(
         let (x, y) = convert(left, bottom)?;
         let (right_x, right_y) = convert(right, bottom)?;
         let (top_x, top_y) = convert(left, top)?;
-        object
-            .reset_matrix(PdfMatrix::new(
-                right_x.value - x.value,
-                right_y.value - y.value,
-                top_x.value - x.value,
-                top_y.value - y.value,
-                x.value,
-                y.value,
-            ))
-            .map_err(|_| EngineError::EditFailed)?;
+        let matrix = [
+            right_x.value - x.value,
+            right_y.value - y.value,
+            top_x.value - x.value,
+            top_y.value - y.value,
+            x.value,
+            y.value,
+        ];
         let count = page.objects().len();
-        page.set_content_regeneration_strategy(PdfPageContentRegenerationStrategy::Manual);
-        page.objects_mut()
-            .add_object(object)
-            .map_err(|_| EngineError::EditFailed)?;
-        page.regenerate_content()
-            .map_err(|_| EngineError::EditFailed)?;
         changes.push(Change {
             page: index,
             count,
             region: [[left, top], [right, top], [right, bottom], [left, bottom]],
-            objects: before.objects,
+            matrix,
         });
     }
-    let mut bytes = document
-        .save_to_bytes()
-        .map_err(|_| EngineError::EditFailed)?;
-    for change in &changes {
-        bytes = crate::content_stream::text_spacing::preserve(
-            pdfium,
-            original,
-            bytes,
-            change.page,
-            &change.objects,
-            &Default::default(),
-            0,
-        )?;
-    }
-    if width_ratio.is_some() {
-        bytes = crate::content_stream::watermarks::tag(
-            &bytes,
-            &changes.iter().map(|change| change.page).collect::<Vec<_>>(),
-        )?;
-    }
+    let bytes = crate::content_stream::stamps::append(
+        original,
+        image_width,
+        image_height,
+        &pixels,
+        &changes
+            .iter()
+            .map(|change| (change.page, change.matrix))
+            .collect::<Vec<_>>(),
+        width_ratio.is_some(),
+    )?;
     let baseline = pdfium
         .load_pdf_from_byte_vec(original.to_vec(), None)
         .map_err(|_| EngineError::VerificationFailed)?;
@@ -233,7 +214,7 @@ pub(super) fn remove(
                 object.as_image_object().is_some() || object.as_x_object_form_object().is_some()
             })
             .collect();
-        // Refuse ambiguous mappings (for example inline images) instead of deleting unrelated content.
+        // Refuse ambiguous mappings instead of deleting unrelated content.
         if draws.len() != count || new.objects().len() + marked.len() != old.objects().len() {
             return Err(EngineError::VerificationFailed);
         }

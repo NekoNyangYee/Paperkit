@@ -3,9 +3,10 @@ use pdf_core::selection::Selection;
 use serde::Serialize;
 use std::path::Path;
 use std::sync::Mutex;
+use std::{collections::HashMap, path::PathBuf};
 
 #[derive(Default)]
-pub struct AppState(pub Mutex<Selection>);
+pub struct AppState(pub Mutex<Selection>, pub Mutex<HashMap<String, PathBuf>>);
 
 #[derive(Debug, Serialize)]
 pub struct InputError {
@@ -55,6 +56,13 @@ pub fn synchronize_selection(
 ) -> Result<SelectionSnapshot, InputError> {
     let mut selection = state.0.lock().map_err(|_| internal_error())?;
     selection.synchronize();
+    if let Some(file) = selection.file() {
+        state
+            .1
+            .lock()
+            .map_err(|_| internal_error())?
+            .insert(file.id.clone(), file.info.path.clone());
+    }
     Ok(snapshot(&selection))
 }
 
@@ -153,6 +161,13 @@ async fn process_file_input(
     match result {
         Ok(info) => {
             selection.commit(revision, info);
+            if let Some(file) = selection.file() {
+                state
+                    .1
+                    .lock()
+                    .map_err(|_| internal_error())?
+                    .insert(file.id.clone(), file.info.path.clone());
+            }
             Ok(snapshot(&selection))
         }
         Err(error) => {

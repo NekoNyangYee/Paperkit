@@ -30,6 +30,15 @@ test("release versions stay synchronized and reject a mismatched tag", async () 
     assert.equal(run([], "v999.0.0").status, 1);
     const changed = run(["0.2.3"]);
     assert.equal(changed.status, 0, changed.stderr);
+    const { check, resolveConfig } = await import("prettier");
+    const manifestPath = resolve(fixture, "package.json");
+    assert(
+      await check(await readFile(manifestPath, "utf8"), {
+        ...(await resolveConfig(manifestPath)),
+        filepath: manifestPath,
+      }),
+      "version bumps must preserve package.json formatting for CI",
+    );
     assert.equal(run([], "v0.2.3").status, 0);
     assert.equal(
       JSON.parse(await readFile(resolve(fixture, "apps/desktop/src-tauri/tauri.conf.json"), "utf8"))

@@ -35,7 +35,7 @@ import {
   SlidersHorizontal,
 } from "lucide-react";
 import { IconButton } from "@/shared/ui/icon-button";
-import { registerExitGuard } from "@/shared/desktop/app-exit";
+import { registerExitGuard, requestAppExit } from "@/shared/desktop/app-exit";
 import { MessageDialog, useDiscardDialog } from "@/shared/ui/MessageDialog";
 import type { FileInfo } from "@/shared/desktop/files";
 import { errorMessage } from "@/shared/desktop/files";
@@ -44,7 +44,7 @@ import { groupSelection } from "@/shared/pdf/selection";
 import type { FontInfo } from "@/shared/pdf/types";
 import type { TextSelection } from "@/shared/pdf/types";
 import type { PreviewPage, TextObject, EditState, EditAction } from "@/shared/pdf/types";
-import { useFileStore } from "@/features/file-input/model/file-store";
+import { useFileStore, registerTabCloseGuard } from "@/features/file-input/model/file-store";
 import {
   PageSidebar,
   type ThumbnailChange,
@@ -71,7 +71,10 @@ function originalFontIssue(cause: unknown) {
   );
 }
 
-export function PdfPreview({ file }: { file: FileInfo }) {
+export function PdfPreview({ file, active = true }: { file: FileInfo; active?: boolean }) {
+  const initialView = useRef(
+    useFileStore.getState().tabs.find((tab) => tab.file?.id === file.id)?.view,
+  ).current;
   const [fontGeneration, setFontGeneration] = useState(0);
   const {
     confirm: confirmDiscard,
@@ -85,13 +88,13 @@ export function PdfPreview({ file }: { file: FileInfo }) {
   const pageArea = useRef<HTMLElement>(null);
   const imageInput = useRef<HTMLInputElement>(null);
   const [stampDialog, setStampDialog] = useState<"watermark" | "signature" | null>(null);
-  const [pageIndex, setPageIndex] = useState(0);
-  const [pageInput, setPageInput] = useState("1");
+  const [pageIndex, setPageIndex] = useState(initialView?.pageIndex ?? 0);
+  const [pageInput, setPageInput] = useState(String((initialView?.pageIndex ?? 0) + 1));
   const [pageInputError, setPageInputError] = useState<string | null>(null);
-  const [zoom, setZoom] = useState(100);
+  const [zoom, setZoom] = useState(initialView?.zoom ?? 100);
   const renderContext = useRef("");
   const renderedLocation = useRef("");
-  const [sidebarOpen, setSidebarOpen] = useState(true);
+  const [sidebarOpen, setSidebarOpen] = useState(initialView?.sidebarOpen ?? true);
   const [editingEnabled, setEditingEnabled] = useState(false);
   const selectionMode = "paragraph" as const;
   const [thumbnailChange, setThumbnailChange] = useState<ThumbnailChange | null>(null);
@@ -136,6 +139,18 @@ export function PdfPreview({ file }: { file: FileInfo }) {
   const clear = useFileStore((state) => state.clear);
   const selectionError = useFileStore((state) => state.error);
   const clearing = useFileStore((state) => state.phase === "clearing");
+
+  useEffect(() => {
+    useFileStore.getState().updateView(file.id, { pageIndex, zoom, sidebarOpen });
+  }, [file.id, pageIndex, zoom, sidebarOpen]);
+  useEffect(() => {
+    const dirty = editState.dirty || unsavedDraft;
+    useFileStore.setState((state) => ({
+      tabs: state.tabs.map((tab) =>
+        tab.file?.id === file.id && tab.dirty !== dirty ? { ...tab, dirty } : tab,
+      ),
+    }));
+  }, [file.id, editState.dirty, unsavedDraft]);
 
   const detectedStyle = useMemo(
     () => selectionStyle(selected, page?.text.objects ?? [], fonts),
@@ -288,8 +303,9 @@ export function PdfPreview({ file }: { file: FileInfo }) {
     const area = pageArea.current;
     if (!area) return;
     const wheel = (event: WheelEvent) => {
-      // Only Ctrl+wheel zooms; ordinary wheel keeps native page scrolling.
-      if (!event.ctrlKey || event.deltaY === 0) return;
+      // Chromium reports trackpad pinches as Ctrl+wheel even without a held Ctrl key.
+      // Ordinary two-finger scrolling must keep its native scrolling behavior.
+      if (!active || !event.ctrlKey || !Number.isFinite(event.deltaY) || event.deltaY === 0) return;
       event.preventDefault();
       if (busy || (loading && !page) || composing.current) return;
       if (unsavedDraft) {
@@ -298,13 +314,20 @@ export function PdfPreview({ file }: { file: FileInfo }) {
       }
       // Apply every wheel event immediately. Only the expensive PDF render is
       // debounced below, so a fast burst never collapses into a single step.
-      setZoom((current) => Math.max(25, Math.min(400, current + (event.deltaY < 0 ? 15 : -15))));
+      setZoom((current) => {
+        // Preserve fractional pinch movement; rounding every event loses slow gestures.
+        const next =
+          event.deltaMode === WheelEvent.DOM_DELTA_PIXEL && Math.abs(event.deltaY) < 80
+            ? current * Math.exp(-event.deltaY / 100)
+            : current + (event.deltaY < 0 ? 15 : -15);
+        return Math.max(25, Math.min(400, next));
+      });
     };
     area.addEventListener("wheel", wheel, { passive: false });
     return () => {
       area.removeEventListener("wheel", wheel);
     };
-  }, [busy, loading, unsavedDraft, page]);
+  }, [active, busy, loading, unsavedDraft, page]);
 
   useEffect(() => {
     if (!editingEnabled) return;
@@ -350,7 +373,7 @@ export function PdfPreview({ file }: { file: FileInfo }) {
         void renderPage(
           file.id,
           pageIndex,
-          Math.max(300, Math.min(1600, (800 * zoom) / 100)),
+          Math.max(300, Math.min(1600, Math.round((800 * zoom) / 100))),
           (percent) => {
             if (!disposed) setLoadPercent((previous) => Math.max(previous, percent));
           },
@@ -435,7 +458,17 @@ export function PdfPreview({ file }: { file: FileInfo }) {
             }
           })
           .catch((cause: unknown) => {
-            if (!disposed) setError(errorMessage(cause));
+            if (!disposed) {
+              const message = errorMessage(cause);
+              if (
+                !renderedLocation.current &&
+                pageIndex > 0 &&
+                message === "존재하지 않는 페이지입니다."
+              ) {
+                setPageIndex(0);
+                setPageInput("1");
+              } else setError(message);
+            }
           })
           .finally(() => {
             if (!disposed) setLoading(false);
@@ -564,7 +597,7 @@ export function PdfPreview({ file }: { file: FileInfo }) {
       });
       if (typeof path !== "string") return;
       const matched = await invoke<string[]>("import_original_font", { path, expected });
-      clearOriginalFonts();
+      clearOriginalFonts(file.id);
       setEditError(null);
       setFontGeneration((value) => value + 1);
       if (!unsavedDraft) setRetry((value) => value + 1);
@@ -841,7 +874,13 @@ export function PdfPreview({ file }: { file: FileInfo }) {
   }
 
   async function closeDocument() {
-    if (working.current || (closeState.current.dirty && !(await approveDiscard()))) return;
+    if (working.current) return;
+    if (
+      !useFileStore.getState().tabs.some((tab) => tab.file?.id === file.id) &&
+      closeState.current.dirty &&
+      !(await approveDiscard())
+    )
+      return;
     await clear();
   }
 
@@ -856,7 +895,6 @@ export function PdfPreview({ file }: { file: FileInfo }) {
         filters: [{ name: "PDF", extensions: ["pdf"] }],
       });
       if (!path || typeof path !== "string") return;
-      if (closeState.current.dirty && !(await confirmDiscard())) return;
       await useFileStore.getState().replaceFile([path]);
     } catch (cause) {
       setEditError(errorMessage(cause));
@@ -870,20 +908,14 @@ export function PdfPreview({ file }: { file: FileInfo }) {
     if (!isTauri()) return;
     let disposed = false;
     let unlisten: (() => void) | undefined;
-    let confirming = false;
     void (async () => {
       const window = getCurrentWindow();
       const stop = await window.onCloseRequested(async (event) => {
-        if (!closeState.current.dirty && !working.current) return;
         event.preventDefault();
-        if (working.current || confirming) return;
-        confirming = true;
         try {
-          if (await confirmDiscard()) await window.destroy();
+          await requestAppExit(() => window.destroy());
         } catch (cause) {
           if (!disposed) setEditError(errorMessage(cause));
-        } finally {
-          confirming = false;
         }
       });
       if (disposed) stop();
@@ -897,15 +929,24 @@ export function PdfPreview({ file }: { file: FileInfo }) {
     };
   }, []);
 
-  useEffect(
-    () =>
-      registerExitGuard(async () => {
-        if (working.current) throw new Error("문서 작업이 끝난 뒤 업데이트해 주세요.");
-        if (closeState.current.dirty && !(await confirmDiscard())) return false;
-        return !working.current;
-      }),
-    [],
-  );
+  useEffect(() => {
+    const guard = async () => {
+      if (working.current) throw new Error("문서 작업이 끝난 뒤 다시 시도해 주세요.");
+      if (closeState.current.dirty) {
+        const store = useFileStore.getState();
+        const tab = store.tabs.find((tab) => tab.file?.id === file.id);
+        if (tab) store.activateTab(tab.id);
+        if (!(await confirmDiscard())) return false;
+      }
+      return !working.current;
+    };
+    const removeExit = registerExitGuard(guard);
+    const removeTab = registerTabCloseGuard(file.id, guard);
+    return () => {
+      removeExit();
+      removeTab();
+    };
+  }, [file.id]);
 
   useEffect(() => {
     const handler = (event: BeforeUnloadEvent) => {
@@ -920,6 +961,7 @@ export function PdfPreview({ file }: { file: FileInfo }) {
 
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
+      if (!active) return;
       if (document.querySelector('[role="alertdialog"], [role="dialog"]')) return;
       if (event.isComposing || composing.current) return;
       const typing =
@@ -950,6 +992,7 @@ export function PdfPreview({ file }: { file: FileInfo }) {
 
   useEffect(
     () => () => {
+      clearOriginalFonts(file.id);
       void releasePreview(file.id).catch(() => {
         /* Backend shutdown needs no UI update. */
       });
@@ -964,24 +1007,31 @@ export function PdfPreview({ file }: { file: FileInfo }) {
           ? "선택 가능한 텍스트 객체가 없습니다. 이미지나 윤곽선으로 저장된 글자일 수 있습니다."
           : null))
       : null;
-  const message =
-    editError ??
-    selectionError ??
-    error ??
-    pageInputError ??
-    (editingEnabled ? fontError : null) ??
-    notice ??
-    pageWarning;
+  const message = !active
+    ? null
+    : (editError ??
+      selectionError ??
+      error ??
+      pageInputError ??
+      (editingEnabled ? fontError : null) ??
+      notice ??
+      pageWarning);
 
   return (
     <main className="flex h-full select-none overflow-hidden">
       {discardDialog}
       {resetDialog.dialog}
       {stampDialog === "watermark" && page && (
-        <WatermarkDialog page={page} onClose={() => setStampDialog(null)} onApply={insertStamp} />
+        <WatermarkDialog
+          page={page}
+          onClose={() => setStampDialog(null)}
+          onApply={insertStamp}
+          applyError={editError}
+        />
       )}
       {stampDialog === "signature" && (
         <SignatureDialog
+          applyError={editError}
           onClose={() => setStampDialog(null)}
           onApply={(png) => insertStamp({ kind: "addSignature", page: pageIndex, png })}
         />
@@ -1080,7 +1130,7 @@ export function PdfPreview({ file }: { file: FileInfo }) {
           <div className="flex items-center gap-3">
             <SelectField
               label="확대 비율"
-              value={String(zoom)}
+              value={String(Math.round(zoom))}
               onValueChange={(value) => setZoom(Number(value))}
               disabled={busy || loading || unsavedDraft}
               className="w-24"
@@ -1094,7 +1144,7 @@ export function PdfPreview({ file }: { file: FileInfo }) {
                   200,
                   250,
                   300,
-                  zoom,
+                  Math.round(zoom),
                 ]),
               ]
                 .sort((a, b) => a - b)
@@ -1218,7 +1268,10 @@ export function PdfPreview({ file }: { file: FileInfo }) {
                     type="button"
                     className="ribbon-command"
                     disabled={busy || loading || preparingEdit || !page}
-                    onClick={() => setStampDialog("watermark")}
+                    onClick={() => {
+                      setEditError(null);
+                      setStampDialog("watermark");
+                    }}
                   >
                     <Stamp size={23} aria-hidden="true" />
                     <span>워터마크</span>
@@ -1228,7 +1281,10 @@ export function PdfPreview({ file }: { file: FileInfo }) {
                     type="button"
                     className="ribbon-command"
                     disabled={busy || loading || preparingEdit || !page}
-                    onClick={() => setStampDialog("signature")}
+                    onClick={() => {
+                      setEditError(null);
+                      setStampDialog("signature");
+                    }}
                   >
                     <PenLine size={23} aria-hidden="true" />
                     <span>전자서명</span>
@@ -1610,7 +1666,7 @@ export function PdfPreview({ file }: { file: FileInfo }) {
           </p>
         )}
         <MessageDialog
-          message={discardOpen ? null : message}
+          message={discardOpen || stampDialog ? null : message}
           title={
             editError || selectionError || error || pageInputError || fontError
               ? "확인해 주세요"
@@ -1676,11 +1732,12 @@ export function PdfPreview({ file }: { file: FileInfo }) {
                 viewport={pageArea}
               >
                 <TextPage
+                  active={active}
                   fontGeneration={fontGeneration}
                   page={page}
                   name={file.name}
                   selected={selected}
-                  disabled={busy || loading || error !== null}
+                  disabled={!active || busy || loading || error !== null}
                   editingEnabled={editingEnabled}
                   mode={selectionMode}
                   onGraphicEdit={async (action) => !!(await run(action))}

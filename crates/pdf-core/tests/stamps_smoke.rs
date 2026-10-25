@@ -70,6 +70,48 @@ fn replacement_png() -> Vec<u8> {
     bytes
 }
 
+fn shared_content_document(content: &[u8]) -> Vec<u8> {
+    use lopdf::{dictionary, Document, Stream};
+    let mut doc = Document::load_mem(&document()).unwrap();
+    let page = *doc.get_pages().get(&1).unwrap();
+    let stream = doc.add_object(Stream::new(dictionary! {}, content.to_vec()));
+    doc.get_object_mut(page)
+        .unwrap()
+        .as_dict_mut()
+        .unwrap()
+        .set("Contents", stream);
+    let mut bytes = Vec::new();
+    let contents = doc
+        .get_dictionary(page)
+        .unwrap()
+        .get(b"Contents")
+        .unwrap()
+        .clone();
+    let resource = doc
+        .get_dictionary(page)
+        .unwrap()
+        .get(b"Resources")
+        .unwrap()
+        .clone();
+    let parent = doc
+        .get_dictionary(page)
+        .unwrap()
+        .get(b"Parent")
+        .unwrap()
+        .as_reference()
+        .unwrap();
+    doc.get_dictionary_mut(parent)
+        .unwrap()
+        .set("Resources", resource);
+    for (_, page_id) in doc.get_pages() {
+        let page = doc.get_dictionary_mut(page_id).unwrap();
+        page.set("Contents", contents.clone());
+        page.remove(b"Resources");
+    }
+    doc.save_to(&mut bytes).unwrap();
+    bytes
+}
+
 fn pixel(bytes: &[u8], x: u32, y: u32) -> Vec<u8> {
     let mut reader = png::Decoder::new(std::io::Cursor::new(bytes))
         .read_info()
@@ -301,6 +343,24 @@ fn watermark_and_signature_preserve_transparency_rotation_history_and_saved_edit
         1,
         "signature must not be tagged"
     );
+    assert!(matches!(
+        engine.edit(
+            reopened.clone(),
+            0,
+            EditAction::TransformGraphic {
+                page: 0,
+                object: loaded.text.watermark_objects[0],
+                matrix: [1.0, 0.0, 0.0, 1.0, 10.0, 10.0],
+            }
+        ),
+        Err(pdf_core::EngineError::WatermarkLocked)
+    ));
+    let locked = engine
+        .render(reopened.clone(), output.clone(), 0, 800)
+        .unwrap();
+    assert_eq!(locked.png, loaded.png);
+    assert_eq!(locked.state.revision, 0);
+    assert!(!locked.state.dirty);
     // An unrelated image inserted after saving must survive managed removal too.
     engine
         .edit(reopened.clone(), 0, EditAction::PasteImage { page: 0, png })
@@ -337,10 +397,10 @@ fn watermark_and_signature_preserve_transparency_rotation_history_and_saved_edit
         vec![0, 1, 2, 3]
     );
     engine.edit(reopened.clone(), 3, EditAction::Redo).unwrap();
-    // Moving a tagged watermark regenerates its stream; its identity must survive.
+    // Managed watermarks stay fixed, including after saving and reopening.
     let watermark = with_image.text.watermark_objects[0];
-    engine
-        .edit(
+    assert!(matches!(
+        engine.edit(
             reopened.clone(),
             4,
             EditAction::TransformGraphic {
@@ -348,16 +408,19 @@ fn watermark_and_signature_preserve_transparency_rotation_history_and_saved_edit
                 object: watermark,
                 matrix: [1.0, 0.0, 0.0, 1.0, 10.0, 10.0],
             },
-        )
-        .unwrap();
+        ),
+        Err(pdf_core::EngineError::WatermarkLocked)
+    ));
     let transformed = engine
         .render(reopened.clone(), output.clone(), 0, 800)
         .unwrap();
     assert_eq!(transformed.text.watermark_objects.len(), 1);
+    assert_eq!(transformed.png, with_image.png);
+    assert_eq!(transformed.state.revision, 4);
     engine
         .edit(
             reopened.clone(),
-            5,
+            4,
             serde_json::from_value(serde_json::json!({"kind":"removeWatermark", "page":null}))
                 .unwrap(),
         )
@@ -378,7 +441,7 @@ fn watermark_and_signature_preserve_transparency_rotation_history_and_saved_edit
     engine
         .edit(
             reopened.clone(),
-            6,
+            5,
             EditAction::Save {
                 path: cleaned.clone(),
             },
@@ -405,5 +468,139 @@ fn watermark_and_signature_preserve_transparency_rotation_history_and_saved_edit
     assert_eq!(fs::read(path).unwrap(), original);
     engine.release("reopened".into()).unwrap();
     engine.release(id).unwrap();
+    // Images must not require a one-to-one text-show mapping or regeneration of
+    // shared original streams, including readable PDFs with an unmatched Q.
+    let duplicate_path = directory.join("shared-content.pdf");
+    let cases = [
+        (
+            "scaled-spacing",
+            concat!(
+                "q 0.75 0 0 0.75 15 20 cm BT /F1 16 Tf 18 TL 1 0 0 1 50 700 Tm 1.25 Tc ",
+                "[(Some) -350 (words)] TJ (Next line) ' 2.5 1.25 (Third line) \" ET Q\n",
+                "BT /F1 10 Tf 50 400 Td (KEEP) Tj ET\n"
+            ),
+        ),
+        (
+            "stroke",
+            concat!(
+                "q 0.15 0 0 0.15 10 10 cm BT /F1 100 Tf 1.25 Tc 2 Tr 0.7 w ",
+                "50 700 Td (OUTLINE) Tj ET Q\nBT /F1 10 Tf 50 400 Td (KEEP) Tj ET\n"
+            ),
+        ),
+        (
+            "unbalanced-state",
+            "Q BT /F1 16 Tf 1.25 Tc 70 700 Td (CONTENT) Tj ET\n",
+        ),
+        (
+            "whitespace",
+            "BT /F1 16 Tf 2 Tc 70 700 Td (KEEP) Tj ET BT /F1 16 Tf 2 Tc 70 680 Td (   ) Tj ET\n",
+        ),
+        (
+            "inline-image",
+            concat!(
+                "q 80 0 0 80 100 200 cm BI /W 1 /H 1 /CS /RGB /BPC 8 ID ABC\nEI Q\n",
+                "BT /F1 16 Tf 70 700 Td (INLINE IMAGE) Tj ET\n"
+            ),
+        ),
+    ];
+    for (name, content) in cases {
+        let duplicate = shared_content_document(content.as_bytes());
+        fs::write(&duplicate_path, &duplicate).unwrap();
+        for (id, action) in [
+            (
+                "signature",
+                EditAction::AddSignature {
+                    page: 0,
+                    png: transparent_png(),
+                },
+            ),
+            (
+                "watermark",
+                EditAction::AddWatermark {
+                    page: None,
+                    png: transparent_png(),
+                    width_ratio: 0.5,
+                },
+            ),
+        ] {
+            let before = engine
+                .render(id.into(), duplicate_path.clone(), 0, 800)
+                .unwrap();
+            engine
+                .edit(id.into(), 0, action)
+                .unwrap_or_else(|error| panic!("{name} {id}: {error:?}"));
+            let stamped = engine
+                .render(id.into(), duplicate_path.clone(), 0, 800)
+                .unwrap();
+            assert_eq!(stamped.text.objects.len(), before.text.objects.len());
+            assert_eq!(
+                stamped
+                    .text
+                    .objects
+                    .iter()
+                    .map(|object| &object.text)
+                    .collect::<Vec<_>>(),
+                before
+                    .text
+                    .objects
+                    .iter()
+                    .map(|object| &object.text)
+                    .collect::<Vec<_>>()
+            );
+            let saved = directory.join(format!("{name}-{id}.pdf"));
+            engine
+                .edit(
+                    id.into(),
+                    1,
+                    EditAction::Save {
+                        path: saved.clone(),
+                    },
+                )
+                .unwrap();
+            assert_eq!(
+                engine
+                    .render("verify-stamp".into(), saved, 0, 800)
+                    .unwrap()
+                    .png,
+                stamped.png
+            );
+            engine.release("verify-stamp".into()).unwrap();
+            let undo_revision = if id == "watermark" {
+                engine
+                    .edit(id.into(), 1, EditAction::RemoveWatermark { page: None })
+                    .unwrap();
+                assert_eq!(
+                    engine
+                        .render(id.into(), duplicate_path.clone(), 0, 800)
+                        .unwrap()
+                        .png,
+                    before.png
+                );
+                engine.edit(id.into(), 2, EditAction::Undo).unwrap();
+                assert_eq!(
+                    engine
+                        .render(id.into(), duplicate_path.clone(), 0, 800)
+                        .unwrap()
+                        .png,
+                    stamped.png
+                );
+                3
+            } else {
+                1
+            };
+            engine
+                .edit(id.into(), undo_revision, EditAction::Undo)
+                .unwrap();
+            assert_eq!(
+                engine
+                    .render(id.into(), duplicate_path.clone(), 0, 800)
+                    .unwrap()
+                    .png,
+                before.png
+            );
+            engine.release(id.into()).unwrap();
+        }
+        assert_eq!(fs::read(&duplicate_path).unwrap(), duplicate);
+    }
     fs::remove_dir_all(directory).unwrap();
 }

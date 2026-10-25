@@ -28,10 +28,12 @@ export function WatermarkDialog({
   page,
   onClose,
   onApply,
+  applyError,
 }: {
   page: PreviewPage;
   onClose: () => void;
   onApply: (action: EditAction) => Promise<boolean>;
+  applyError?: string | null;
 }) {
   const { open, close } = useDialogClose(onClose);
   const resetDialog = useConfirmDialog({
@@ -49,8 +51,14 @@ export function WatermarkDialog({
   const [backgroundReady, setBackgroundReady] = useState(!page.text.watermarkObjects?.length);
   const [backgroundError, setBackgroundError] = useState<string | null>(null);
   const content = useMemo(
-    () => ({ kind: options.kind, text: options.text, image: options.image, color: options.color }),
-    [options.kind, options.text, options.image, options.color],
+    () => ({
+      kind: options.kind,
+      text: options.text,
+      image: options.image,
+      color: options.color,
+      date: options.date,
+    }),
+    [options.kind, options.text, options.image, options.color, options.date],
   );
   const [preview, setPreview] = useState<{
     content: typeof content;
@@ -128,7 +136,8 @@ export function WatermarkDialog({
     }));
     setSize(WATERMARK_MODE_DEFAULTS[kind].size);
   }
-  const validContent = options.kind === "text" ? !!options.text.trim() : !!options.image;
+  const validContent =
+    options.kind === "text" ? !!options.text.trim() || !!options.date : !!options.image;
   const placeholder = options.kind === "image" && !options.image;
   const visible =
     enabled && placeholder
@@ -197,7 +206,7 @@ export function WatermarkDialog({
         <div className="grid min-h-0 min-w-0 grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-5">
           <fieldset
             disabled={pending}
-            className="min-h-0 min-w-0 space-y-4 [@media(max-height:650px)]:space-y-3"
+            className="min-h-0 min-w-0 space-y-4 overflow-y-auto [@media(max-height:650px)]:space-y-3"
           >
             <legend className="sr-only">워터마크 설정</legend>
             <div className="flex items-center justify-between rounded-lg border border-stone-200 px-3 py-2">
@@ -256,6 +265,30 @@ export function WatermarkDialog({
                       onChange={(event) => setOptions({ ...options, text: event.target.value })}
                       className="block h-20 resize-none [@media(max-height:650px)]:h-16"
                     />
+                    <div className="mt-2 flex items-center justify-between gap-3 text-xs">
+                      <label htmlFor="watermark-date" className="flex min-w-0 items-center gap-2">
+                        <span>날짜 추가</span>
+                        {options.date && <span className="text-stone-500">{options.date}</span>}
+                      </label>
+                      <Switch
+                        id="watermark-date"
+                        aria-label="날짜 추가"
+                        checked={options.date !== null}
+                        disabled={pending}
+                        onCheckedChange={(checked) =>
+                          setOptions({
+                            ...options,
+                            date: checked
+                              ? new Intl.DateTimeFormat("sv-SE", {
+                                  year: "numeric",
+                                  month: "2-digit",
+                                  day: "2-digit",
+                                }).format(new Date())
+                              : null,
+                          })
+                        }
+                      />
+                    </div>
                   </div>
                 ) : (
                   <label className="block text-sm">
@@ -411,9 +444,9 @@ export function WatermarkDialog({
           </div>
         </div>
         <footer className="min-w-0">
-          {(error || backgroundError) && (
+          {(applyError || error || backgroundError) && (
             <p role="alert" className="mb-2 text-sm text-red-700">
-              {error ?? backgroundError}
+              {applyError ?? error ?? backgroundError}
             </p>
           )}
           {!enabled && !page.text.watermarkPages?.length && (

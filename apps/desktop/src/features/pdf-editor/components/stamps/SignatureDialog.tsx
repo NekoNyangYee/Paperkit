@@ -11,9 +11,11 @@ import { canvasContext, signaturePng } from "@/features/pdf-editor/lib/stamps/ca
 export function SignatureDialog({
   onClose,
   onApply,
+  applyError,
 }: {
   onClose: () => void;
   onApply: (png: number[]) => Promise<boolean>;
+  applyError?: string | null;
 }) {
   const { open, close } = useDialogClose(onClose);
   const resetDialog = useConfirmDialog({
@@ -115,9 +117,9 @@ export function SignatureDialog({
             다시 그리기
           </Button>
         </div>
-        {error && (
+        {(applyError || error) && (
           <p role="alert" className="shrink-0 text-sm text-red-700">
-            {error}
+            {applyError ?? error}
           </p>
         )}
         <div className="flex shrink-0 justify-end gap-2">

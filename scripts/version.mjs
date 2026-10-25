@@ -46,7 +46,7 @@ if (requested) {
       p,
       await format(JSON.stringify(json[i]), {
         ...(await resolveConfig(resolve(root, p))),
-        parser: "json",
+        filepath: resolve(root, p),
       }),
     );
   }

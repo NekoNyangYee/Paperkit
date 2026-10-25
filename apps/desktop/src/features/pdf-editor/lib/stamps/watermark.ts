@@ -7,6 +7,7 @@ export interface WatermarkOptions {
   opacity: number;
   angle: number;
   color: string;
+  date: string | null;
 }
 
 export const DEFAULT_WATERMARK_OPTIONS: WatermarkOptions = {
@@ -16,6 +17,7 @@ export const DEFAULT_WATERMARK_OPTIONS: WatermarkOptions = {
   opacity: 25,
   angle: -30,
   color: "#64748b",
+  date: null,
 };
 
 export const WATERMARK_MODE_DEFAULTS = {
@@ -23,15 +25,20 @@ export const WATERMARK_MODE_DEFAULTS = {
   image: { size: 80, angle: 0 },
 } as const;
 
-export type WatermarkContent = Pick<WatermarkOptions, "kind" | "text" | "image" | "color">;
+export type WatermarkContent = Pick<WatermarkOptions, "kind" | "text" | "image" | "color" | "date">;
+
+export function watermarkText(options: Pick<WatermarkOptions, "text" | "date">) {
+  return [options.text.trim(), options.date].filter(Boolean).join(" ");
+}
 
 // Rasterize content once; preview adjustments use CSS until the user applies them.
 export async function watermarkSource(options: WatermarkContent) {
   const source = document.createElement("canvas");
   if (options.kind === "text") {
-    if (!options.text.trim()) throw new Error("워터마크 텍스트를 입력해 주세요.");
+    const text = watermarkText(options);
+    if (!text) throw new Error("워터마크 텍스트를 입력해 주세요.");
     await document.fonts?.ready;
-    const lines = options.text.trim().split(/\r?\n/);
+    const lines = text.split(/\r?\n/);
     const font = '600 72px system-ui, "Malgun Gothic", sans-serif';
     const measure = canvasContext(source);
     measure.font = font;

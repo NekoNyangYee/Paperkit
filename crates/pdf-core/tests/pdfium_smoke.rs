@@ -311,6 +311,27 @@ fn native_load_render_navigate_cache_release_and_errors() {
     assert_eq!(edited.text.objects[0].text, "Hello PDF");
     assert_eq!(edited.text.objects[1].text, "Second Line");
     assert_eq!(fs::read(&source).unwrap(), original);
+    // Loading, editing and releasing a second tab must preserve the first tab's
+    // in-memory PDF, revision, dirty flag and undo history.
+    let other = engine
+        .render("other-tab".into(), source.clone(), 0, 800)
+        .unwrap();
+    assert_eq!(other.text.objects[0].text, "Hello World");
+    assert!(!other.state.dirty);
+    engine
+        .edit("other-tab".into(), 0, replace("Other PDF"))
+        .unwrap();
+    let first_tab = engine
+        .render("edit".into(), source.clone(), 0, 800)
+        .unwrap();
+    assert_eq!(first_tab.text.objects[0].text, "Hello PDF");
+    assert_eq!(first_tab.state.revision, 1);
+    assert!(first_tab.state.dirty && first_tab.state.can_undo);
+    let second_tab = engine
+        .render("other-tab".into(), source.clone(), 0, 800)
+        .unwrap();
+    assert_eq!(second_tab.text.objects[0].text, "Other PDF");
+    engine.release("other-tab".into()).unwrap();
     let undo = engine.edit("edit".into(), 1, EditAction::Undo).unwrap();
     assert!(!undo.dirty && undo.can_redo);
     assert_eq!(

@@ -78,3 +78,4 @@ export const inspectFile = (paths: string[], revision: number) =>
   selectionCommand("receive_file_input", { paths, revision });
 export const clearSelection = (revision: number) =>
   selectionCommand("clear_selection", { revision });
+export const closeFile = (fileId: string) => invoke<void>("close_file", { fileId });

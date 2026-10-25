@@ -6,6 +6,7 @@ pub fn run() {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_store::Builder::default().build())
         .manage(files::AppState::default())
         .manage(updates::UpdateState::default())
         .setup(|app| {
@@ -41,7 +42,8 @@ pub fn run() {
             preview::copy_graphic,
             preview::import_original_font,
             preview::editing_background,
-            preview::release_preview
+            preview::release_preview,
+            preview::close_file
         ])
         .run(tauri::generate_context!())
         .expect("failed to run Paperkit desktop application");

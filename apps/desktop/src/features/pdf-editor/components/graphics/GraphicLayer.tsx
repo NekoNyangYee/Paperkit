@@ -20,6 +20,7 @@ import {
 } from "@/features/pdf-editor/lib/graphics/graphic-clipboard";
 const labels = { image: "이미지", path: "도형", shading: "음영", form: "복합 객체" };
 export function GraphicLayer({
+  active = true,
   page,
   disabled,
   onEdit,
@@ -27,6 +28,7 @@ export function GraphicLayer({
   textSelected,
   graphicMode = false,
 }: {
+  active?: boolean;
   textSelected?: boolean;
   graphicMode?: boolean;
   page: PreviewPage;
@@ -34,7 +36,9 @@ export function GraphicLayer({
   onEdit: (action: EditAction) => Promise<boolean>;
   onSelect: () => void;
 }) {
-  const objects = page.text.graphics ?? [];
+  const objects = (page.text.graphics ?? []).filter(
+    (object) => !page.text.watermarkObjects?.includes(object.id),
+  );
   const [id, setId] = useState<number | null>(null);
   const selected = objects.find((o) => o.id === id);
   const [layers, setLayers] = useState<{ background: string; foreground: string } | null>(null);
@@ -108,6 +112,7 @@ export function GraphicLayer({
     }
   }
   useEffect(() => {
+    if (!active) return;
     const copy = (event: ClipboardEvent) => {
       if (!selected || disabled || committing || isTextInput(event.target)) return;
       event.preventDefault();
@@ -129,7 +134,7 @@ export function GraphicLayer({
       document.removeEventListener("copy", copy);
       document.removeEventListener("paste", pasteEvent);
     };
-  }, [selected, disabled, committing, page, layers]);
+  }, [active, selected, disabled, committing, page, layers]);
   useEffect(() => {
     if (textSelected) setId(null);
   }, [textSelected]);
@@ -427,7 +432,7 @@ export function GraphicLayer({
           </div>
         </>
       )}
-      <MessageDialog message={error} onDismiss={() => setError(null)} />
+      <MessageDialog message={active ? error : null} onDismiss={() => setError(null)} />
     </div>
   );
 }

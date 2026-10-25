@@ -6,8 +6,12 @@ import { Minus, Square, Copy, X } from "lucide-react";
 import { VersionDialog } from "@/features/about/components/VersionDialog";
 import { MessageDialog } from "@/shared/ui/MessageDialog";
 import appIcon from "../../../app-icon.svg";
+import { WorkspaceTabs } from "./WorkspaceTabs";
+import { useFileStore } from "@/features/file-input/model/file-store";
 
 export function TitleBar() {
+  const persistenceError = useFileStore((state) => state.persistenceError);
+  const dismissPersistenceError = useFileStore((state) => state.dismissPersistenceError);
   const [error, setError] = useState<string | null>(null);
   const [maximized, setMaximized] = useState(false);
   useEffect(() => {
@@ -45,12 +49,12 @@ export function TitleBar() {
   }
   return (
     <>
-      <header className="pointer-events-auto relative z-[60] flex h-10 shrink-0 select-none items-center border-b border-stone-200 bg-white">
-        <div data-tauri-drag-region className="flex h-full min-w-0 flex-1 items-center gap-2 px-3">
+      <header className="pointer-events-auto relative z-[60] flex h-10 shrink-0 select-none items-center border-b border-stone-200 bg-stone-100">
+        <div data-tauri-drag-region className="flex h-full shrink-0 items-center gap-2 px-3">
           <img src={appIcon} alt="" className="pointer-events-none size-6" />
           <span className="pointer-events-none text-sm font-semibold">Paperkit</span>
-          <span className="pointer-events-none text-xs text-stone-400">PDF 편집기</span>
         </div>
+        <WorkspaceTabs />
         <VersionDialog />
         {(
           [
@@ -76,6 +80,11 @@ export function TitleBar() {
         ))}
       </header>
       <MessageDialog message={error} onDismiss={() => setError(null)} />
+      <MessageDialog
+        title="탭 복원 및 저장"
+        message={persistenceError}
+        onDismiss={dismissPersistenceError}
+      />
     </>
   );
 }

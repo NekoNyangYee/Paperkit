@@ -14,6 +14,10 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke, isTauri: mocks.isTauri }));
 vi.mock("@tauri-apps/plugin-dialog", () => ({ open: mocks.open }));
+vi.mock("@/shared/desktop/workspace", () => ({
+  readWorkspace: async () => null,
+  writeWorkspace: async () => {},
+}));
 vi.mock("@/features/about/components/VersionDialog", () => ({ VersionDialog: () => null }));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({
@@ -32,7 +36,12 @@ vi.mock("@/shared/pdf/api", () => ({
 import { FileInput } from "./FileInput";
 import { App } from "@/app/App";
 vi.mock("@/features/pdf-editor/components/preview/PdfPreview", () => ({
-  PdfPreview: () => <div>PDF 미리보기 화면</div>,
+  PdfPreview: ({ file }: { file: { name: string } }) => (
+    <div>
+      PDF 미리보기 화면
+      <input aria-label={`${file.name} 메모`} />
+    </div>
+  ),
 }));
 import { useFileStore } from "@/features/file-input/model/file-store";
 
@@ -88,12 +97,16 @@ beforeEach(() => {
     return Promise.resolve(mocks.stop);
   });
   mocks.invoke.mockImplementation(async (command, args) => {
+    if (command === "close_file") return;
     if (command === "synchronize_selection") return snapshot(1);
     if (command === "clear_selection") return snapshot(args.revision);
     if (command === "receive_file_input") return snapshot(args.revision, original);
     throw new Error(`Unexpected command ${command}`);
   });
   useFileStore.setState({
+    tabs: [{ id: "initial", file: null }],
+    activeTabId: "initial",
+    persistenceError: null,
     file: null,
     phase: "idle",
     error: null,
@@ -120,6 +133,27 @@ afterEach(() => {
 });
 
 describe("file input UI → Zustand → IPC adapter (native IPC mocked)", () => {
+  it("keeps mounted document state when opening and switching between tabs", async () => {
+    mocks.invoke.mockImplementation(async (command, args) =>
+      command === "synchronize_selection"
+        ? snapshot(1)
+        : snapshot(args.revision, args.paths[0] === original.path ? original : replacement),
+    );
+    mocks.open.mockResolvedValueOnce(original.path).mockResolvedValueOnce(replacement.path);
+    render(<App />);
+    await waitFor(() => expect(useFileStore.getState().ready).toBe(true));
+    fireEvent.click(screen.getByRole("button", { name: "파일 선택" }));
+    const firstInput = await screen.findByRole("textbox", { name: `${original.name} 메모` });
+    fireEvent.change(firstInput, { target: { value: "보존할 입력" } });
+    fireEvent.click(screen.getByRole("button", { name: "새 탭" }));
+    fireEvent.click(screen.getByRole("button", { name: "파일 선택" }));
+    await screen.findByRole("textbox", { name: `${replacement.name} 메모` });
+    expect(screen.queryByRole("textbox", { name: `${original.name} 메모` })).toBeNull();
+    fireEvent.click(screen.getByRole("tab", { name: original.name }));
+    expect(screen.getByRole("textbox", { name: `${original.name} 메모` })).toBe(firstInput);
+    expect((firstInput as HTMLInputElement).value).toBe("보존할 입력");
+    expect(useFileStore.getState().tabs).toHaveLength(2);
+  });
   it("does not show a previous file thumbnail when a newer file is selected", async () => {
     const oldImage = deferred<{ imageUrl: string }>();
     mocks.render.mockImplementation((id) =>

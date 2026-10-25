@@ -54,6 +54,7 @@ fn message(error: PreviewError) -> String {
         PreviewError::UnsupportedText => {
             "이 객체 또는 입력 문자는 아직 안전하게 수정할 수 없습니다."
         }
+        PreviewError::WatermarkLocked => "워터마크의 위치는 고정되어 있습니다. 워터마크 설정에서 변경해 주세요.",
         PreviewError::TextOverflow => {
             "텍스트가 페이지 경계 또는 고정 셀 범위를 벗어납니다. 블록의 위치·너비·크기를 조절해 주세요."
         }
@@ -202,12 +203,11 @@ pub async fn render_selected_page(
 ) -> Result<PreviewPage, String> {
     let on_progress = on_progress.map(|id| id.channel_on::<_, u8>(webview));
     let path = {
-        let selection = state.0.lock().map_err(|_| "파일 상태를 읽지 못했습니다.")?;
-        let file = selection
-            .file()
-            .filter(|file| file.id == file_id)
-            .ok_or("선택된 파일이 변경되었습니다.")?;
-        file.info.path.clone()
+        let files = state.1.lock().map_err(|_| "파일 상태를 읽지 못했습니다.")?;
+        files
+            .get(&file_id)
+            .cloned()
+            .ok_or("선택된 파일이 변경되었습니다.")?
     };
     let engine = preview.0.clone();
     let id = file_id.clone();
@@ -230,11 +230,10 @@ pub async fn render_selected_page(
     .await
     .map_err(|_| "PDF 처리 작업을 완료하지 못했습니다.")?;
     let current = state
-        .0
+        .1
         .lock()
         .map_err(|_| "파일 상태를 읽지 못했습니다.")?
-        .file()
-        .is_some_and(|file| file.id == file_id);
+        .contains_key(&file_id);
     if !current {
         let engine = preview.0.clone();
         let _ = tauri::async_runtime::spawn_blocking(move || engine.release(file_id)).await;
@@ -265,11 +264,10 @@ pub async fn edit_document(
     preview: State<'_, PreviewState>,
 ) -> Result<pdf_core::edit::EditState, String> {
     if !state
-        .0
+        .1
         .lock()
         .map_err(|_| "파일 상태를 읽지 못했습니다.")?
-        .file()
-        .is_some_and(|file| file.id == file_id)
+        .contains_key(&file_id)
     {
         return Err("선택된 파일이 변경되었습니다.".into());
     }
@@ -277,6 +275,24 @@ pub async fn edit_document(
     tauri::async_runtime::spawn_blocking(move || engine.edit(file_id, revision, action))
         .await
         .map_err(|_| "PDF 작업을 완료하지 못했습니다.".to_string())?
+        .map_err(message)
+}
+
+#[tauri::command]
+pub async fn close_file(
+    file_id: String,
+    state: State<'_, AppState>,
+    preview: State<'_, PreviewState>,
+) -> Result<(), String> {
+    state
+        .1
+        .lock()
+        .map_err(|_| "파일 상태를 읽지 못했습니다.")?
+        .remove(&file_id);
+    let engine = preview.0.clone();
+    tauri::async_runtime::spawn_blocking(move || engine.release(file_id))
+        .await
+        .map_err(|_| "PDF 문서를 닫지 못했습니다.".to_string())?
         .map_err(message)
 }
 

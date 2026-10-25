@@ -24,6 +24,7 @@ async function decodedLayer(data: string) {
 }
 
 export function TextPage({
+  active = true,
   fontGeneration = 0,
   page,
   name,
@@ -44,6 +45,7 @@ export function TextPage({
   onResize,
   onGraphicEdit,
 }: {
+  active?: boolean;
   fontGeneration?: number;
   page: PreviewPage;
   name: string;
@@ -402,6 +404,7 @@ export function TextPage({
       )}
       {editingEnabled && !inlineEditing && onGraphicEdit && (
         <GraphicLayer
+          active={active}
           graphicMode={mode === "graphic"}
           textSelected={!!selected}
           key={`${page.fileId}:${page.pageIndex}:${page.state.revision}`}
@@ -771,7 +774,7 @@ export function TextPage({
       )}
       <MessageDialog
         title="편집 화면 준비 오류"
-        message={backgroundError}
+        message={active ? backgroundError : null}
         onRetry={() => setPrepareAttempt((value) => value + 1)}
       />
       {inlineEditing && !ready && !backgroundError && (

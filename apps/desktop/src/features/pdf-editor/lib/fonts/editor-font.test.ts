@@ -86,6 +86,7 @@ it("loads the document's font bytes and separates identical object IDs across fi
   expect(await editorFont("OriginalCustomFont", context)).toBe(first);
   expect(mocks.invoke).toHaveBeenCalledTimes(1);
   expect(await editorFont("OriginalCustomFont", { ...context, fileId: "second" })).not.toBe(first);
-  expect(remove).toHaveBeenCalledTimes(1);
+  expect(remove).not.toHaveBeenCalled();
+  expect(await editorFont("OriginalCustomFont", context)).toBe(first);
   expect(add).toHaveBeenCalledTimes(2);
 });

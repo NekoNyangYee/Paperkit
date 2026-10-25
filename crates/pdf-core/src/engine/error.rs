@@ -15,6 +15,7 @@ pub enum EngineError {
     EditFailed,
     EditTooLarge,
     UnsupportedText,
+    WatermarkLocked,
     TextOverflow,
     PageOverflow,
     FollowingContentOverflow,

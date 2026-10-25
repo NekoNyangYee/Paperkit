@@ -44,11 +44,14 @@ vi.mock("@/features/pdf-editor/components/stamps/SignatureDialog", () => ({
   SignatureDialog: ({
     onApply,
     onClose,
+    applyError,
   }: {
     onApply: (png: number[]) => Promise<boolean>;
     onClose: () => void;
+    applyError?: string | null;
   }) => (
     <div role="dialog" aria-label="서명 입력">
+      {applyError && <p role="alert">{applyError}</p>}
       <button
         onClick={async () => {
           if (await onApply([7, 8, 9])) onClose();
@@ -63,6 +66,10 @@ vi.mock("@tauri-apps/plugin-dialog", () => ({
   confirm: mocks.confirm,
   save: mocks.save,
   open: mocks.open,
+}));
+vi.mock("@/shared/desktop/workspace", () => ({
+  writeWorkspace: async () => {},
+  flushWorkspace: async () => {},
 }));
 vi.mock("@tauri-apps/api/window", () => ({
   getCurrentWindow: () => ({ onCloseRequested: mocks.onClose, destroy: mocks.destroy }),
@@ -117,7 +124,16 @@ beforeEach(() => {
     if (command === "render_selected_page") return page(args.pageIndex, args.width);
     if (command === "clear_selection") return { revision: args.revision, file: null, error: null };
   });
-  useFileStore.setState({ file, ready: true, phase: "selected", revision: 1, error: null });
+  useFileStore.setState({
+    file,
+    ready: true,
+    phase: "selected",
+    revision: 1,
+    error: null,
+    openedFileId: null,
+    tabs: [{ id: "initial", file: null }],
+    activeTabId: "initial",
+  });
 });
 
 const object = {
@@ -519,6 +535,61 @@ it.each([
     await new Promise((resolve) => setTimeout(resolve, 150));
   });
   expect(select.textContent).toBe(`${zoom}%`);
+});
+
+it("smoothly scales trackpad pinch deltas without zooming the browser or losing tiny movements", async () => {
+  render(<PdfPreview file={file} />);
+  await screen.findByRole("img", { name: "example.pdf · 1페이지" });
+  const area = screen.getByRole("region", { name: "PDF 페이지" });
+  const select = screen.getByRole("combobox", { name: "확대 비율" });
+  mocks.invoke.mockClear();
+  // Chromium supplies ctrlKey for trackpad pinches; no physical Ctrl keydown is needed.
+  for (let i = 0; i < 50; i++) {
+    const event = new WheelEvent("wheel", {
+      bubbles: true,
+      cancelable: true,
+      ctrlKey: true,
+      deltaMode: 0,
+      deltaY: -0.1,
+    });
+    act(() => {
+      area.dispatchEvent(event);
+    });
+    expect(event.defaultPrevented).toBe(true);
+  }
+  expect(select.textContent).toBe("105%");
+  for (let i = 0; i < 50; i++) fireEvent.wheel(area, { ctrlKey: true, deltaMode: 0, deltaY: 0.1 });
+  expect(select.textContent).toBe("100%");
+  await waitFor(() =>
+    expect(mocks.invoke).toHaveBeenCalledWith(
+      "render_selected_page",
+      expect.objectContaining({ width: 800 }),
+    ),
+  );
+  expect(
+    mocks.invoke.mock.calls.filter(
+      ([command, args]) => command === "render_selected_page" && !args.thumbnail,
+    ),
+  ).toHaveLength(1);
+});
+
+it("keeps two-finger scrolling native and ignores pinch events in inactive tabs", async () => {
+  const view = render(<PdfPreview file={file} />);
+  await screen.findByRole("img", { name: "example.pdf · 1페이지" });
+  const area = screen.getByRole("region", { name: "PDF 페이지" });
+  const scroll = new WheelEvent("wheel", {
+    bubbles: true,
+    cancelable: true,
+    deltaX: 2.5,
+    deltaY: 3.5,
+  });
+  act(() => {
+    area.dispatchEvent(scroll);
+  });
+  expect(scroll.defaultPrevented).toBe(false);
+  view.rerender(<PdfPreview file={file} active={false} />);
+  fireEvent.wheel(area, { ctrlKey: true, deltaY: -2.5 });
+  expect(screen.getByRole("combobox", { name: "확대 비율" }).textContent).toBe("100%");
 });
 
 it("retains text tools at minimum wheel zoom without mistaking editor requests for thumbnails", async () => {
@@ -1329,41 +1400,44 @@ async function enableEditing(_mode?: string) {
 
 it.each([
   { dirty: true, pick: null, discard: false, replaced: false, confirms: 0 },
-  { dirty: true, pick: "C:\\next.pdf", discard: false, replaced: false, confirms: 1 },
-  { dirty: true, pick: "C:\\next.pdf", discard: true, replaced: true, confirms: 1 },
+  { dirty: true, pick: "C:\\next.pdf", discard: false, replaced: true, confirms: 0 },
+  { dirty: true, pick: "C:\\next.pdf", discard: true, replaced: true, confirms: 0 },
   { dirty: false, pick: "C:\\next.pdf", discard: false, replaced: true, confirms: 0 },
-])("opens a replacement in place: %j", async ({ dirty, pick, discard, replaced, confirms }) => {
-  const next = { ...file, id: "next-file", path: "C:\\next.pdf", name: "next.pdf" };
-  useFileStore.setState({ openedFileId: file.id });
-  mocks.open.mockResolvedValue(pick);
-  mocks.confirm.mockResolvedValue(discard);
-  mocks.invoke.mockImplementation(async (command, args) => {
-    if (command === "render_selected_page")
-      return {
-        ...page(args.pageIndex, args.width),
-        state: { revision: 0, dirty, canUndo: dirty, canRedo: false },
-      };
-    if (command === "receive_file_input")
-      return { revision: args.revision, file: next, error: null };
-  });
-  render(<PdfPreview file={file} />);
-  await enableEditing();
-  const snapshots: (string | null)[] = [];
-  const unsubscribe = useFileStore.subscribe((state) => snapshots.push(state.openedFileId));
-  fireEvent.click(screen.getByRole("button", { name: "다른 파일 열기" }));
-  await waitFor(() => expect(mocks.open).toHaveBeenCalledTimes(1));
-  await waitFor(() =>
-    expect(
-      (screen.getByRole("button", { name: "다른 파일 열기" }) as HTMLButtonElement).disabled,
-    ).toBe(false),
-  );
-  expect(mocks.confirm).toHaveBeenCalledTimes(confirms);
-  expect(useFileStore.getState().file?.id).toBe(replaced ? next.id : file.id);
-  expect(useFileStore.getState().openedFileId).toBe(replaced ? next.id : file.id);
-  expect(snapshots).not.toContain(null);
-  expect(mocks.invoke.mock.calls.some(([cmd]) => cmd === "clear_selection")).toBe(false);
-  unsubscribe();
-});
+])(
+  "opens another document without discarding the current document: %j",
+  async ({ dirty, pick, discard, replaced, confirms }) => {
+    const next = { ...file, id: "next-file", path: "C:\\next.pdf", name: "next.pdf" };
+    useFileStore.setState({ openedFileId: file.id });
+    mocks.open.mockResolvedValue(pick);
+    mocks.confirm.mockResolvedValue(discard);
+    mocks.invoke.mockImplementation(async (command, args) => {
+      if (command === "render_selected_page")
+        return {
+          ...page(args.pageIndex, args.width),
+          state: { revision: 0, dirty, canUndo: dirty, canRedo: false },
+        };
+      if (command === "receive_file_input")
+        return { revision: args.revision, file: next, error: null };
+    });
+    render(<PdfPreview file={file} />);
+    await enableEditing();
+    const snapshots: (string | null)[] = [];
+    const unsubscribe = useFileStore.subscribe((state) => snapshots.push(state.openedFileId));
+    fireEvent.click(screen.getByRole("button", { name: "다른 파일 열기" }));
+    await waitFor(() => expect(mocks.open).toHaveBeenCalledTimes(1));
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "다른 파일 열기" }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    expect(mocks.confirm).toHaveBeenCalledTimes(confirms);
+    expect(useFileStore.getState().file?.id).toBe(replaced ? next.id : file.id);
+    expect(useFileStore.getState().openedFileId).toBe(replaced ? next.id : file.id);
+    expect(snapshots).not.toContain(null);
+    expect(mocks.invoke.mock.calls.some(([cmd]) => cmd === "clear_selection")).toBe(false);
+    unsubscribe();
+  },
+);
 
 it("opens read-only, blocks editing shortcuts, and enables an input at the text position", async () => {
   mocks.invoke.mockImplementation(async (command, args) =>
@@ -1721,6 +1795,16 @@ it("preserves dirty state on save cancellation/failure and clears it after verif
   fireEvent.click(screen.getByRole("button", { name: "새 PDF로 저장" }));
   await screen.findByText("새 PDF로 저장하고 다시 열어 검증했습니다.");
   expect(screen.queryByText("저장하지 않은 변경 있음")).toBeNull();
+});
+
+it("only handles document shortcuts while its tab is active", async () => {
+  const view = render(<PdfPreview file={file} active={false} />);
+  await enableEditing();
+  fireEvent.keyDown(window, { ctrlKey: true, key: "s" });
+  expect(mocks.save).not.toHaveBeenCalled();
+  view.rerender(<PdfPreview file={file} active />);
+  fireEvent.keyDown(window, { ctrlKey: true, key: "s" });
+  await waitFor(() => expect(mocks.save).toHaveBeenCalledTimes(1));
 });
 
 it("confirms native close and document close when unsaved changes exist", async () => {

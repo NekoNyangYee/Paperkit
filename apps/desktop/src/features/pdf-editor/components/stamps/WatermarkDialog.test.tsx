@@ -36,6 +36,48 @@ beforeEach(() => {
   vi.mocked(watermarkPng).mockResolvedValue(image);
 });
 
+it("previews and applies a date beside text, and restores the original text when disabled", async () => {
+  vi.spyOn(Intl, "DateTimeFormat").mockReturnValue({
+    format: () => "2026-10-25",
+  } as Intl.DateTimeFormat);
+  try {
+    const onApply = vi.fn().mockResolvedValue(false);
+    render(<WatermarkDialog page={page} onApply={onApply} onClose={vi.fn()} />);
+    fireEvent.click(screen.getByRole("switch", { name: "워터마크 사용" }));
+    fireEvent.change(screen.getByLabelText("워터마크 텍스트"), {
+      target: { value: "내부 검토용" },
+    });
+    fireEvent.click(screen.getByRole("switch", { name: "날짜 추가" }));
+    await waitFor(() =>
+      expect(watermarkSource).toHaveBeenLastCalledWith(
+        expect.objectContaining({ text: "내부 검토용", date: "2026-10-25" }),
+      ),
+    );
+    await waitFor(() =>
+      expect(
+        (screen.getByRole("button", { name: "워터마크 적용" }) as HTMLButtonElement).disabled,
+      ).toBe(false),
+    );
+    fireEvent.click(screen.getByRole("button", { name: "워터마크 적용" }));
+    await screen.findByRole("alert");
+    expect(watermarkPng).toHaveBeenLastCalledWith(
+      expect.objectContaining({ text: "내부 검토용", date: "2026-10-25" }),
+      source,
+    );
+    fireEvent.click(screen.getByRole("switch", { name: "날짜 추가" }));
+    await waitFor(() =>
+      expect(watermarkSource).toHaveBeenLastCalledWith(
+        expect.objectContaining({ text: "내부 검토용", date: null }),
+      ),
+    );
+    expect((screen.getByLabelText("워터마크 텍스트") as HTMLTextAreaElement).value).toBe(
+      "내부 검토용",
+    );
+  } finally {
+    vi.restoreAllMocks();
+  }
+});
+
 it("previews text over the real page and submits all pages as one watermark action", async () => {
   vi.mocked(watermarkPng).mockResolvedValue(image);
   const onApply = vi.fn().mockResolvedValue(true),
@@ -312,6 +354,7 @@ it("resets text, color, selected image, sliders and page scope to their initial 
       text: "CONFIDENTIAL",
       color: "#64748b",
       image: null,
+      date: null,
     }),
   );
   fireEvent.click(screen.getByRole("radio", { name: "이미지" }));

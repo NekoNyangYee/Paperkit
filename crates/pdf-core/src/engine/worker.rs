@@ -1,19 +1,33 @@
-//! Owns the PDFium instance, active document, and transactional history.
+//! Owns the PDFium instance and independent document sessions with transactional history.
 use super::{
     protocol::Request,
     raster::{render_loaded_page, render_page},
 };
 use crate::{editing::History, engine::error::EngineError as PreviewError};
 use pdfium_render::prelude::*;
-use std::{fs::File, io::Read, path::PathBuf, sync::mpsc::Receiver};
+use std::{collections::HashMap, fs::File, io::Read, path::PathBuf, sync::mpsc::Receiver};
 const MAX_FILE_BYTES: u64 = 128 * 1024 * 1024;
 pub(super) fn run(library: PathBuf, font_directory: PathBuf, receiver: Receiver<Request>) {
     let pdfium = Pdfium::bind_to_library(library).map(Pdfium::new);
-    // This local lives after Pdfium and drops before it: no self-referential struct.
-    let mut current: Option<(String, PdfDocument<'_>)> = None;
-    let mut history = History::default();
-    let mut watermark_pages = Vec::new();
+    // Sessions live after Pdfium and drop before it: no self-referential struct.
+    let mut documents = HashMap::new();
     while let Ok(request) = receiver.recv() {
+        let session_id = match &request {
+            Request::CopyGraphic { id, .. }
+            | Request::Background { id, .. }
+            | Request::Font { id, .. }
+            | Request::Edit { id, .. }
+            | Request::Render { id, .. }
+            | Request::Release(id) => id.clone(),
+        };
+        let (mut current, mut history, mut watermark_pages) =
+            documents.remove(&session_id).unwrap_or_else(|| {
+                (
+                    None::<(String, PdfDocument<'_>)>,
+                    History::default(),
+                    Vec::new(),
+                )
+            });
         match request {
             Request::CopyGraphic {
                 id,
@@ -255,6 +269,9 @@ pub(super) fn run(library: PathBuf, font_directory: PathBuf, receiver: Receiver<
                 })();
                 let _ = reply.send(result);
             }
+        }
+        if current.is_some() {
+            documents.insert(session_id, (current, history, watermark_pages));
         }
     }
 }

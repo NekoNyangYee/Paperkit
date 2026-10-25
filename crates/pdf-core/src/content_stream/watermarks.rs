@@ -24,7 +24,7 @@ fn marked_draws(ops: &[Operation]) -> Result<Vec<usize>, EngineError> {
             "EMC" => {
                 stack.pop().ok_or(EngineError::EditFailed)?;
             }
-            "Do" => {
+            "Do" | "BI" => {
                 if stack.iter().any(|marked| *marked) {
                     result.push(draw);
                 }
@@ -60,40 +60,40 @@ pub(crate) fn draws(bytes: &[u8], index: i32) -> Result<(Vec<usize>, usize), Eng
     let count = content
         .operations
         .iter()
-        .filter(|op| op.operator == "Do")
+        .filter(|op| matches!(op.operator.as_str(), "Do" | "BI"))
         .count();
     Ok((marked_draws(&content.operations)?, count))
 }
-// Insertion is append-only, so the new stamp is the last XObject draw on each target page.
-pub(crate) fn tag(bytes: &[u8], targets: &[i32]) -> Result<Vec<u8>, EngineError> {
-    rewrite(bytes, targets, true)
-}
 pub(crate) fn remove(bytes: &[u8], targets: &[i32]) -> Result<Vec<u8>, EngineError> {
-    rewrite(bytes, targets, false)
-}
-fn rewrite(bytes: &[u8], targets: &[i32], insert: bool) -> Result<Vec<u8>, EngineError> {
     let mut doc = Document::load_mem(bytes).map_err(|_| EngineError::EditFailed)?;
     let pages = doc.get_pages();
     for &index in targets {
         let page = *pages
             .get(&(index as u32 + 1))
             .ok_or(EngineError::InvalidPage)?;
-        let mut content = content(&doc, page)?;
-        let marked = marked_draws(&content.operations)?;
-        if insert {
-            let last = content
-                .operations
-                .iter()
-                .rposition(|op| op.operator == "Do")
-                .ok_or(EngineError::VerificationFailed)?;
-            content.operations.insert(
-                last,
-                Operation::new("BMC", vec![Object::Name(TAG.to_vec())]),
-            );
-            content
-                .operations
-                .insert(last + 2, Operation::new("EMC", vec![]));
-        } else {
+        let mut contents = Vec::new();
+        for stream_id in doc.get_page_contents(page) {
+            let bytes = doc
+                .get_object(stream_id)
+                .and_then(Object::as_stream)
+                .and_then(|stream| stream.get_plain_content_with_limit(64 * 1024 * 1024))
+                .map_err(|_| EngineError::EditFailed)?;
+            // Keep original streams byte-for-byte, particularly inline images
+            // that lopdf can read but cannot faithfully encode back as operators.
+            if !bytes.windows(TAG.len()).any(|part| part == TAG) {
+                contents.push(Object::Reference(stream_id));
+                continue;
+            }
+            let mut content =
+                Content::decode_strict(&bytes).map_err(|_| EngineError::EditFailed)?;
+            let marked = marked_draws(&content.operations)?;
+            if marked.is_empty() {
+                contents.push(Object::Reference(stream_id));
+                continue;
+            }
+            if content.operations.iter().any(|op| op.operator == "BI") {
+                return Err(EngineError::UnsupportedText);
+            }
             let mut draw = 0;
             content.operations.retain(|op| {
                 if op.operator != "Do" {
@@ -103,16 +103,16 @@ fn rewrite(bytes: &[u8], targets: &[i32], insert: bool) -> Result<Vec<u8>, Engin
                 draw += 1;
                 keep
             });
+            let stream = Stream::new(
+                dictionary! {},
+                content.encode().map_err(|_| EngineError::EditFailed)?,
+            );
+            contents.push(Object::Reference(doc.add_object(stream)));
         }
-        let stream = Stream::new(
-            dictionary! {},
-            content.encode().map_err(|_| EngineError::EditFailed)?,
-        );
-        let stream = doc.add_object(stream);
         doc.get_object_mut(page)
             .and_then(Object::as_dict_mut)
             .map_err(|_| EngineError::EditFailed)?
-            .set("Contents", stream);
+            .set("Contents", contents);
     }
     let mut output = Vec::new();
     doc.save_to(&mut output)

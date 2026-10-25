@@ -29,6 +29,9 @@ impl History {
             }
         };
         let (marked, count) = crate::content_stream::watermarks::draws(bytes, index)?;
+        if marked.is_empty() {
+            return Ok(Vec::new());
+        }
         let page = document
             .pages()
             .get(index)
@@ -73,6 +76,13 @@ impl History {
             }
             self.saved = Some(bytes.clone());
             self.bytes = Some(bytes);
+        }
+        if let EditAction::TransformGraphic { page, object, .. } = &action {
+            if self.watermark_pages().contains(page)
+                && self.watermark_objects(document, *page)?.contains(object)
+            {
+                return Err(PreviewError::WatermarkLocked);
+            }
         }
         match action {
             EditAction::Save { path } => {

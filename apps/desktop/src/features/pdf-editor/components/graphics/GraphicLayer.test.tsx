@@ -3,6 +3,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { GraphicLayer } from "./GraphicLayer";
 import { invoke } from "@tauri-apps/api/core";
 import type { PreviewPage } from "@/shared/pdf/types";
+import { rememberGraphic } from "@/features/pdf-editor/lib/graphics/graphic-clipboard";
 vi.mock("@tauri-apps/api/core", () => ({
   invoke: vi.fn().mockResolvedValue("data:image/png;base64,AA=="),
 }));
@@ -47,6 +48,59 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
+it("pastes into the active document without changing inactive documents", async () => {
+  const inactiveEdit = vi.fn().mockResolvedValue(true);
+  const activeEdit = vi.fn().mockResolvedValue(true);
+  render(
+    <>
+      <GraphicLayer
+        page={page}
+        active={false}
+        disabled={false}
+        onEdit={inactiveEdit}
+        onSelect={() => {}}
+      />
+      <GraphicLayer
+        page={{ ...page, fileId: "b" }}
+        active
+        disabled={false}
+        onEdit={activeEdit}
+        onSelect={() => {}}
+      />
+    </>,
+  );
+  const marker = rememberGraphic([37, 80, 68, 70]);
+  fireEvent.paste(document, { clipboardData: { getData: () => marker, items: [] } });
+  await waitFor(() => expect(activeEdit).toHaveBeenCalledTimes(1));
+  expect(inactiveEdit).not.toHaveBeenCalled();
+});
+
+it("keeps managed watermarks out of selection and dragging while other images remain movable", async () => {
+  const edit = vi.fn().mockResolvedValue(false);
+  const signature = { ...page.text.graphics![0], id: 2 };
+  const marked = {
+    ...page,
+    text: { ...page.text, watermarkObjects: [0], graphics: [...page.text.graphics!, signature] },
+  };
+  render(
+    <GraphicLayer page={marked} disabled={false} onEdit={edit} onSelect={() => {}} graphicMode />,
+  );
+  expect(screen.queryByRole("button", { name: "이미지 1 선택" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "선택한 이미지·도형 이동" })).toBeNull();
+  const image = screen.getByRole("button", { name: "이미지 3 선택" });
+  fireEvent.pointerDown(image, { clientX: 20, clientY: 30 });
+  fireEvent.pointerMove(image, { clientX: 40, clientY: 40 });
+  fireEvent.pointerUp(image);
+  await waitFor(() =>
+    expect(edit).toHaveBeenCalledWith({
+      kind: "transformGraphic",
+      page: 0,
+      object: 2,
+      matrix: [1, 0, 0, 1, 20, -10],
+    }),
+  );
+});
+
 it("moves the actual image with a live preview, without an information panel", async () => {
   const edit = vi.fn().mockResolvedValue(false);
   render(<GraphicLayer page={page} disabled={false} onEdit={edit} onSelect={() => {}} />);

@@ -123,6 +123,33 @@ pub(super) fn image_from_png<'a>(
     document: &PdfDocument<'a>,
     png: &[u8],
 ) -> Result<PdfPageObject<'a>, PreviewError> {
+    let (width, height, mut bgra) = png_pixels(png)?;
+    let bitmap = PdfBitmap::from_bytes(
+        width as i32,
+        height as i32,
+        PdfBitmapFormat::BGRA,
+        &mut bgra,
+    )
+    .map_err(|_| PreviewError::EditFailed)?;
+    let mut object = PdfPageImageObject::new(document).map_err(|_| PreviewError::EditFailed)?;
+    object
+        .set_bitmap(&bitmap)
+        .map_err(|_| PreviewError::EditFailed)?;
+    // Image objects use a unit square, independent of their pixel dimensions.
+    object
+        .reset_matrix(PdfMatrix::new(
+            width as f32,
+            0.0,
+            0.0,
+            height as f32,
+            0.0,
+            0.0,
+        ))
+        .map_err(|_| PreviewError::EditFailed)?;
+    Ok(object.into())
+}
+
+pub(super) fn png_pixels(png: &[u8]) -> Result<(u32, u32, Vec<u8>), PreviewError> {
     if png.len() > 32 * 1024 * 1024 {
         return Err(PreviewError::TooLarge);
     }
@@ -157,29 +184,7 @@ pub(super) fn image_from_png<'a>(
         };
         bgra.extend_from_slice(&[b, g, r, a]);
     }
-    let bitmap = PdfBitmap::from_bytes(
-        info.width as i32,
-        info.height as i32,
-        PdfBitmapFormat::BGRA,
-        &mut bgra,
-    )
-    .map_err(|_| PreviewError::EditFailed)?;
-    let mut object = PdfPageImageObject::new(document).map_err(|_| PreviewError::EditFailed)?;
-    object
-        .set_bitmap(&bitmap)
-        .map_err(|_| PreviewError::EditFailed)?;
-    // Image objects use a unit square, independent of their pixel dimensions.
-    object
-        .reset_matrix(PdfMatrix::new(
-            info.width as f32,
-            0.0,
-            0.0,
-            info.height as f32,
-            0.0,
-            0.0,
-        ))
-        .map_err(|_| PreviewError::EditFailed)?;
-    Ok(object.into())
+    Ok((info.width, info.height, bgra))
 }
 
 fn insert<'a>(

@@ -1,16 +1,22 @@
 import { invoke } from "@tauri-apps/api/core";
 
 const cache = new Map<string, Promise<string>>();
-const originalCache = new Map<number, Promise<string>>();
-const originalFaces = new Set<FontFace>();
-let originalContext = "";
+const originalDocuments = new Map<
+  string,
+  {
+    context: string;
+    cache: Map<number, Promise<string>>;
+    faces: Set<FontFace>;
+  }
+>();
 let fontSequence = 0;
-export function clearOriginalFonts() {
-  if (typeof document.fonts !== "undefined")
-    originalFaces.forEach((face) => document.fonts.delete(face));
-  originalFaces.clear();
-  originalCache.clear();
-  originalContext = "";
+export function clearOriginalFonts(fileId?: string) {
+  for (const [id, fonts] of originalDocuments) {
+    if (fileId !== undefined && fileId !== id) continue;
+    if (typeof document.fonts !== "undefined")
+      fonts.faces.forEach((face) => document.fonts.delete(face));
+    originalDocuments.delete(id);
+  }
 }
 function fontBytes(data: string): Uint8Array<ArrayBuffer> {
   const binary = atob(data);
@@ -44,14 +50,13 @@ export function editorFont(name: string, original?: FontContext): Promise<string
   if (typeof FontFace === "undefined") return Promise.resolve(fallback);
   if (original && !/^(Helvetica|Courier|Times)(-|$)/.test(name)) {
     const context = `${original.fileId}:${original.revision}:${original.pageIndex}`;
-    if (originalContext !== context) {
-      originalFaces.forEach((face) => document.fonts.delete(face));
-      originalFaces.clear();
-      originalCache.clear();
-      originalContext = context;
+    if (originalDocuments.get(original.fileId)?.context !== context) {
+      clearOriginalFonts(original.fileId);
+      originalDocuments.set(original.fileId, { context, cache: new Map(), faces: new Set() });
     }
-    if (!originalCache.has(original.objectId))
-      originalCache.set(
+    const fonts = originalDocuments.get(original.fileId)!;
+    if (!fonts.cache.has(original.objectId))
+      fonts.cache.set(
         original.objectId,
         (async () => {
           const data = await invoke<string>(
@@ -62,16 +67,18 @@ export function editorFont(name: string, original?: FontContext): Promise<string
             throw new Error("원본 글꼴을 읽지 못했습니다.");
           const family = `Paperkit-original-${++fontSequence}`;
           const font = await new FontFace(family, fontBytes(data)).load();
-          if (originalContext !== context) throw new Error("문서가 변경되었습니다.");
+          if (originalDocuments.get(original.fileId) !== fonts)
+            throw new Error("문서가 변경되었습니다.");
           document.fonts.add(font);
-          originalFaces.add(font);
+          fonts.faces.add(font);
           return `"${family}"`;
         })().catch((error) => {
-          if (originalContext === context) originalCache.delete(original.objectId);
+          if (originalDocuments.get(original.fileId) === fonts)
+            fonts.cache.delete(original.objectId);
           throw error;
         }),
       );
-    return originalCache.get(original.objectId)!;
+    return fonts.cache.get(original.objectId)!;
   }
   if (!id) return Promise.resolve(fallback);
   return replacementEditorFont(id);
