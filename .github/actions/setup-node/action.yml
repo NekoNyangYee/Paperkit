@@ -11,7 +11,7 @@ runs:
     - uses: actions/setup-node@v4
       with:
         node-version: "22"
-        cache: pnpm
+        cache: ${{ inputs.install == 'true' && 'pnpm' || '' }}
     - name: Install JavaScript dependencies
       if: inputs.install == 'true'
       shell: pwsh
