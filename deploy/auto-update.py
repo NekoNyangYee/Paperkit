@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Pull only CI-verified main commits; no GitHub credentials are needed."""
+"""Deploy the exact CI-verified commit requested by GitHub Actions."""
 import argparse
 import fcntl
 import json
@@ -115,6 +115,7 @@ def deploy(root, sha, run):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("--root", type=Path, required=True)
+    parser.add_argument("--sha", required=True, help="Exact CI-verified main commit supplied by Actions")
     parser.add_argument("--check", action="store_true", help="Check CI without modifying the running service")
     args = parser.parse_args()
     root = args.root.resolve(strict=True)
@@ -125,9 +126,12 @@ def main():
             fcntl.flock(lock, fcntl.LOCK_EX | fcntl.LOCK_NB)
         except BlockingIOError:
             return
-        sha = github("/commits/main")["sha"]
+        sha = args.sha
         if not re.fullmatch(r"[0-9a-f]{40}", sha):
             raise ValueError("Invalid main commit")
+        if github("/commits/main")["sha"] != sha:
+            print("A newer main commit exists; skipping stale deployment.", flush=True)
+            return
         state_path = root / ".deploy-state.json"
         if state_path.exists() and json.loads(state_path.read_text()).get("sha") == sha:
             print(f"Already deployed: {sha}", flush=True)
@@ -141,7 +145,7 @@ def main():
             runs = []
         run = verified_run(runs, sha)
         if not run:
-            print(f"Waiting for successful backend CI: {sha}", flush=True)
+            raise RuntimeError(f"Successful backend CI is required before deployment: {sha}")
         elif args.check:
             print(f"Ready to deploy: {sha}", flush=True)
         else:
