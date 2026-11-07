@@ -1,0 +1,63 @@
+name: CD
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+
+permissions:
+  contents: read
+  actions: read
+
+concurrency:
+  group: paperkit-production
+  cancel-in-progress: false
+
+jobs:
+  release:
+    name: Publish release
+    if: >-
+      github.repository == 'NekoNyangYee/Paperkit' &&
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.event == 'push' &&
+      github.event.workflow_run.head_branch == 'main' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: windows-2022
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      actions: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - uses: actions/download-artifact@v4
+        with:
+          name: Paperkit-Windows-x64
+          path: release-assets
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          run-id: ${{ github.event.workflow_run.id }}
+      - name: Publish verified installer
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          GH_REPO: ${{ github.repository }}
+          RELEASE_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: ./.github/scripts/publish-release.ps1 -Commit $env:RELEASE_SHA
+
+  deploy:
+    name: Deploy server
+    needs: release
+    runs-on: [self-hosted, Linux, ARM64, paperkit-production]
+    timeout-minutes: 45
+    environment:
+      name: production
+      url: https://thkim.tail969319.ts.net/paperkit/healthz
+    steps:
+      - name: Deploy verified commit and check APIs
+        shell: bash
+        env:
+          DEPLOY_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: sudo -n /usr/local/sbin/paperkit-deploy-verified "$DEPLOY_SHA"

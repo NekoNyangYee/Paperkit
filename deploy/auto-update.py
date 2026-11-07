@@ -138,14 +138,14 @@ def main():
             return
         query = urlencode({"branch": "main", "event": "push", "head_sha": sha, "per_page": 10})
         try:
-            runs = github("/actions/workflows/backend.yml/runs?" + query)["workflow_runs"]
+            runs = github("/actions/workflows/ci.yml/runs?" + query)["workflow_runs"]
         except HTTPError as error:
             if error.code != 404:
                 raise
             runs = []
         run = verified_run(runs, sha)
         if not run:
-            raise RuntimeError(f"Successful backend CI is required before deployment: {sha}")
+            raise RuntimeError(f"Successful CI is required before deployment: {sha}")
         elif args.check:
             print(f"Ready to deploy: {sha}", flush=True)
         else:
