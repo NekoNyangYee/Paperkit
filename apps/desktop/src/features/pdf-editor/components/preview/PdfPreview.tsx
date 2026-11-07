@@ -63,6 +63,8 @@ import { selectionStyle, weightLabel } from "@/features/pdf-editor/lib/fonts/fon
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/shared/ui/dialog";
 import { WatermarkDialog } from "@/features/pdf-editor/components/stamps/WatermarkDialog";
 import { SignatureDialog } from "@/features/pdf-editor/components/stamps/SignatureDialog";
+import { LoginRequiredDialog } from "@/features/auth/components/LoginRequiredDialog";
+import { useAuthStore } from "@/features/auth/model/auth-store";
 
 function originalFontIssue(cause: unknown) {
   const message = errorMessage(cause);
@@ -72,6 +74,7 @@ function originalFontIssue(cause: unknown) {
 }
 
 export function PdfPreview({ file, active = true }: { file: FileInfo; active?: boolean }) {
+  const session = useAuthStore((state) => state.session);
   const initialView = useRef(
     useFileStore.getState().tabs.find((tab) => tab.file?.id === file.id)?.view,
   ).current;
@@ -664,6 +667,11 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
   }
 
   async function run(action: EditAction, revision = editState.revision): Promise<EditState | null> {
+    if (
+      ["addSignature", "addWatermark", "removeWatermark"].includes(action.kind) &&
+      !useAuthStore.getState().session
+    )
+      return null;
     if (!editingEnabled || working.current || !page) return null;
     working.current = true;
     setBusy(true);
@@ -838,6 +846,7 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
   }
 
   async function insertStamp(action: EditAction): Promise<boolean> {
+    if (!useAuthStore.getState().session) return false;
     if (working.current || !page || !editingEnabled || loading || preparingEdit) return false;
     const committed = await commitDraft();
     if (!committed) return false;
@@ -1021,7 +1030,12 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
     <main className="flex h-full select-none overflow-hidden">
       {discardDialog}
       {resetDialog.dialog}
-      {stampDialog === "watermark" && page && (
+      <LoginRequiredDialog
+        open={active && !!stampDialog && !session}
+        feature={stampDialog === "signature" ? "전자서명" : "워터마크"}
+        onClose={() => setStampDialog(null)}
+      />
+      {session && stampDialog === "watermark" && page && (
         <WatermarkDialog
           page={page}
           onClose={() => setStampDialog(null)}
@@ -1029,7 +1043,7 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
           applyError={editError}
         />
       )}
-      {stampDialog === "signature" && (
+      {session && stampDialog === "signature" && (
         <SignatureDialog
           applyError={editError}
           onClose={() => setStampDialog(null)}
@@ -1266,8 +1280,9 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
                   <Button
                     variant="ghost"
                     type="button"
-                    className="ribbon-command"
+                    className={`ribbon-command ${!session ? "opacity-40" : ""}`}
                     disabled={busy || loading || preparingEdit || !page}
+                    title={session ? "워터마크" : "워터마크 · 로그인 필요"}
                     onClick={() => {
                       setEditError(null);
                       setStampDialog("watermark");
@@ -1279,8 +1294,9 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
                   <Button
                     variant="ghost"
                     type="button"
-                    className="ribbon-command"
+                    className={`ribbon-command ${!session ? "opacity-40" : ""}`}
                     disabled={busy || loading || preparingEdit || !page}
+                    title={session ? "전자서명" : "전자서명 · 로그인 필요"}
                     onClick={() => {
                       setEditError(null);
                       setStampDialog("signature");

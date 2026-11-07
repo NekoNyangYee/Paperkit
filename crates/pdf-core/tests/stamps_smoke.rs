@@ -1,6 +1,111 @@
 use pdf_core::{edit::EditAction, Paperframe};
 use std::{fs, path::PathBuf};
 
+#[test]
+#[ignore = "requires bundled Windows PDFium"]
+fn watermark_settings_follow_save_reopen_page_replacement_and_history() {
+    let resources =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/resources");
+    let engine = Paperframe::start(resources.join("pdfium/pdfium.dll")).unwrap();
+    let directory = std::env::temp_dir().join(format!(
+        "paperkit-watermark-settings-{}",
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("original.pdf");
+    fs::write(&path, document()).unwrap();
+    let id = "settings".to_owned();
+    engine.render(id.clone(), path.clone(), 0, 800).unwrap();
+    let settings = serde_json::json!({ "kind": "text", "text": "Saved watermark", "image": null,
+        "opacity": 40.0, "angle": -15.0, "color": "#64748b", "date": "2026-11-07", "size": 60.0, "scope": "all" });
+    let action = |page, settings| {
+        serde_json::from_value(serde_json::json!({ "kind": "addWatermark",
+        "page": page, "png": transparent_png(), "widthRatio": 0.6, "settings": settings }))
+        .unwrap()
+    };
+    engine
+        .edit(id.clone(), 0, action(None::<i32>, settings.clone()))
+        .unwrap();
+    let stamped = engine.render(id.clone(), path.clone(), 0, 800).unwrap();
+    assert_eq!(
+        serde_json::to_value(stamped.text.watermark_settings).unwrap(),
+        settings
+    );
+    engine.edit(id.clone(), 1, EditAction::Undo).unwrap();
+    let undone = engine.render(id.clone(), path.clone(), 0, 800).unwrap();
+    assert!(undone.text.watermark_settings.is_none());
+    assert!(undone.text.watermark_pages.is_empty());
+    engine.edit(id.clone(), 2, EditAction::Redo).unwrap();
+    assert_eq!(
+        serde_json::to_value(
+            engine
+                .render(id.clone(), path.clone(), 0, 800)
+                .unwrap()
+                .text
+                .watermark_settings
+        )
+        .unwrap(),
+        settings
+    );
+    let mut replacement = settings.clone();
+    replacement["text"] = "Page-specific".into();
+    replacement["scope"] = "current".into();
+    engine
+        .edit(id.clone(), 3, action(Some(1), replacement.clone()))
+        .unwrap();
+    let output = directory.join("saved.pdf");
+    engine
+        .edit(
+            id.clone(),
+            4,
+            EditAction::Save {
+                path: output.clone(),
+            },
+        )
+        .unwrap();
+    let reopened = "reopened-settings".to_owned();
+    for (index, expected) in [(0, settings.clone()), (1, replacement.clone())] {
+        let page = engine
+            .render(reopened.clone(), output.clone(), index, 800)
+            .unwrap();
+        assert_eq!(
+            serde_json::to_value(page.text.watermark_settings).unwrap(),
+            expected
+        );
+        assert!(page.text.watermark_pages.contains(&index));
+    }
+    engine
+        .edit(
+            reopened.clone(),
+            0,
+            EditAction::RemoveWatermark { page: Some(1) },
+        )
+        .unwrap();
+    assert!(engine
+        .render(reopened.clone(), output.clone(), 1, 800)
+        .unwrap()
+        .text
+        .watermark_settings
+        .is_none());
+    assert_eq!(
+        serde_json::to_value(
+            engine
+                .render(reopened.clone(), output.clone(), 0, 800)
+                .unwrap()
+                .text
+                .watermark_settings
+        )
+        .unwrap(),
+        settings
+    );
+    engine.release(id).unwrap();
+    engine.release(reopened).unwrap();
+    fs::remove_dir_all(directory).unwrap();
+}
+
 fn document() -> Vec<u8> {
     use lopdf::{dictionary, Document, Object, Stream};
     let mut doc = Document::with_version("1.7");
@@ -225,6 +330,7 @@ fn watermark_and_signature_preserve_transparency_rotation_history_and_saved_edit
                 page: Some(1),
                 png: replacement_png(),
                 width_ratio: 0.8,
+                settings: None,
             },
         )
         .unwrap();
@@ -309,6 +415,7 @@ fn watermark_and_signature_preserve_transparency_rotation_history_and_saved_edit
             page: None,
             png: png.clone(),
             width_ratio: f32::NAN,
+            settings: None,
         },
     ] {
         assert!(engine.edit(id.clone(), 6, action).is_err());
@@ -520,6 +627,7 @@ fn watermark_and_signature_preserve_transparency_rotation_history_and_saved_edit
                     page: None,
                     png: transparent_png(),
                     width_ratio: 0.5,
+                    settings: None,
                 },
             ),
         ] {

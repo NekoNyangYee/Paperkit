@@ -261,6 +261,8 @@ pub(super) fn run(library: PathBuf, font_directory: PathBuf, receiver: Receiver<
                     if include_text {
                         rendered.text.watermark_pages = watermark_pages.clone();
                         if watermark_pages.contains(&page) {
+                            rendered.text.watermark_settings =
+                                history.watermark_settings(&current.as_ref().unwrap().1, page);
                             rendered.text.watermark_objects =
                                 history.watermark_objects(&current.as_ref().unwrap().1, page)?;
                         }

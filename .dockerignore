@@ -1,0 +1,16 @@
+**
+!Cargo.toml
+!Cargo.lock
+!apps/
+!apps/backend/
+!apps/backend/Cargo.toml
+!apps/backend/src/
+!apps/backend/src/**
+!apps/backend/migrations/
+!apps/backend/migrations/**
+!apps/desktop/
+!apps/desktop/src-tauri/
+!apps/desktop/src-tauri/Cargo.toml
+!crates/
+!crates/pdf-core/
+!crates/pdf-core/Cargo.toml

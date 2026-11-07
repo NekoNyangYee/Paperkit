@@ -10,3 +10,16 @@ apps/desktop/src-tauri/resources/fonts/
 .DS_Store
 Thumbs.db
 /docs/
+.env
+.env.*
+!.env.example
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+/data/
+/backups/
+__pycache__/
+.deploy-sources/
+.deploy-state.json
+.deploy-state.tmp
+.deploy.lock

@@ -12,6 +12,11 @@ const mocks = vi.hoisted(() => ({
   fonts: vi.fn(),
   watermark: vi.fn(),
   watermarkSource: vi.fn(),
+  login: vi.fn(),
+}));
+vi.mock("@/features/auth/model/auth-store", async (importOriginal) => ({
+  ...(await importOriginal<typeof import("@/features/auth/model/auth-store")>()),
+  signInWithGoogle: mocks.login,
 }));
 // Domain tests stub the modal boundary; MessageDialog.test covers real focus/response behavior.
 vi.mock("@/shared/ui/MessageDialog", () => ({
@@ -77,6 +82,7 @@ vi.mock("@tauri-apps/api/window", () => ({
 import { PdfPreview } from "./PdfPreview";
 import { useFileStore } from "@/features/file-input/model/file-store";
 import { rememberGraphic } from "@/features/pdf-editor/lib/graphics/graphic-clipboard";
+import { useAuthStore } from "@/features/auth/model/auth-store";
 
 const file = { id: "file-1", path: "C:\\example.pdf", name: "example.pdf", sizeBytes: 100 };
 const page = (index = 0, width = 800) => ({
@@ -90,6 +96,14 @@ const page = (index = 0, width = 800) => ({
   state: { revision: 0, dirty: false, canUndo: false, canRedo: false },
 });
 beforeEach(() => {
+  mocks.login.mockReset();
+  useAuthStore.setState({
+    session: { user: { id: "user-id" }, access_token: "test-token" } as never,
+    ready: true,
+    busy: false,
+    signingIn: false,
+    error: null,
+  });
   vi.stubGlobal(
     "ResizeObserver",
     class {
@@ -159,6 +173,38 @@ const object = {
   fontChangeBlocked: null,
 };
 
+it.each(["전자서명", "워터마크"])(
+  "requires login for %s and resumes after signing in",
+  async (feature) => {
+    useAuthStore.setState({ session: null });
+    render(<PdfPreview file={file} />);
+    await enableEditing();
+    const button = screen.getByRole("button", { name: feature });
+    expect(button.classList.contains("opacity-40")).toBe(true);
+    expect(button.hasAttribute("disabled")).toBe(false);
+    fireEvent.click(button);
+    const modal = await screen.findByRole("dialog", { name: "로그인이 필요합니다" });
+    expect(within(modal).getByText(`${feature} 기능은 로그인 후 이용할 수 있습니다.`)).toBeTruthy();
+    fireEvent.click(within(modal).getByRole("button", { name: "Google로 로그인" }));
+    expect(mocks.login).toHaveBeenCalledOnce();
+    expect(
+      mocks.invoke.mock.calls.some(
+        ([command, args]) =>
+          command === "edit_document" &&
+          ["addSignature", "addWatermark"].includes(args.action.kind),
+      ),
+    ).toBe(false);
+    act(() => useAuthStore.setState({ session: { user: { id: "user-id" } } as never }));
+    await waitFor(() =>
+      expect(screen.queryByRole("dialog", { name: "로그인이 필요합니다" })).toBeNull(),
+    );
+    expect(button.classList.contains("opacity-40")).toBe(false);
+    if (feature === "전자서명")
+      expect(screen.getByRole("dialog", { name: "서명 입력" })).toBeTruthy();
+    else expect(screen.getByRole("switch", { name: "워터마크 사용" })).toBeTruthy();
+  },
+);
+
 it("applies a watermark from the toolbar with the current revision and enables undo", async () => {
   let revision = 0;
   mocks.invoke.mockImplementation(async (command, args) => {
@@ -180,7 +226,13 @@ it("applies a watermark from the toolbar with the current revision and enables u
     expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
       fileId: file.id,
       revision: 0,
-      action: { kind: "addWatermark", page: null, png: [1, 2, 3], widthRatio: 0.6 },
+      action: {
+        kind: "addWatermark",
+        page: null,
+        png: [1, 2, 3],
+        widthRatio: 0.6,
+        settings: expect.objectContaining({ kind: "text", size: 60, scope: "all" }),
+      },
     }),
   );
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());

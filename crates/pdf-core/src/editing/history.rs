@@ -13,6 +13,21 @@ pub(crate) struct History {
 }
 
 impl History {
+    pub fn watermark_settings(
+        &self,
+        document: &PdfDocument<'_>,
+        index: i32,
+    ) -> Option<super::WatermarkSettings> {
+        let saved;
+        let bytes = match self.bytes.as_deref() {
+            Some(bytes) => bytes,
+            None => {
+                saved = document.save_to_bytes().ok()?;
+                &saved
+            }
+        };
+        crate::content_stream::watermarks::settings(bytes, index)
+    }
     pub fn watermark_objects(
         &self,
         document: &PdfDocument<'_>,

@@ -1,0 +1,32 @@
+{
+	admin off
+	auto_https off
+	servers {
+		timeouts {
+			read_header 10s
+			read_body 35s
+			write 60s
+			idle 60s
+		}
+	}
+}
+
+:8080 {
+	header {
+		-Server
+		X-Content-Type-Options nosniff
+		Cache-Control no-store
+	}
+	# Strip the public prefix exactly once. Backend routes start at /v1.
+	handle_path /paperkit/* {
+		request_body {
+			max_size 33554432
+		}
+		reverse_proxy backend:8080
+	}
+	# Add handle_path /service-a/* { reverse_proxy service-a:8080 } here.
+	# Access logging is deliberately disabled: queries and headers may contain data.
+	handle {
+		respond "Not found" 404
+	}
+}

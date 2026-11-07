@@ -5,6 +5,54 @@ use lopdf::{
     dictionary, Document, Object, Stream,
 };
 pub(crate) const TAG: &[u8] = b"PaperkitWatermark";
+const SETTINGS_KEY: &[u8] = b"PaperkitWatermarkSettings";
+
+pub(crate) fn settings(bytes: &[u8], index: i32) -> Option<crate::editing::WatermarkSettings> {
+    let doc = Document::load_mem(bytes).ok()?;
+    let page = *doc.get_pages().get(&(index as u32 + 1))?;
+    let value = doc.get_dictionary(page).ok()?.get(SETTINGS_KEY).ok()?;
+    let (_, value) = doc.dereference(value).ok()?;
+    let bytes = value.as_str().ok()?;
+    if bytes.len() > 7 * 1024 * 1024 {
+        return None;
+    }
+    let settings: crate::editing::WatermarkSettings = serde_json::from_slice(bytes).ok()?;
+    settings.valid().then_some(settings)
+}
+
+pub(crate) fn write_settings(
+    bytes: &[u8],
+    index: Option<i32>,
+    settings: Option<&crate::editing::WatermarkSettings>,
+) -> Result<Vec<u8>, EngineError> {
+    let mut doc = Document::load_mem(bytes).map_err(|_| EngineError::EditFailed)?;
+    let reference = settings
+        .map(|settings| {
+            serde_json::to_vec(settings)
+                .map(|bytes| {
+                    doc.add_object(Object::String(bytes, lopdf::StringFormat::Hexadecimal))
+                })
+                .map_err(|_| EngineError::EditFailed)
+        })
+        .transpose()?;
+    for (number, page) in doc.get_pages() {
+        if index.is_some_and(|index| number as i32 != index + 1) {
+            continue;
+        }
+        let page = doc
+            .get_dictionary_mut(page)
+            .map_err(|_| EngineError::EditFailed)?;
+        if let Some(reference) = reference {
+            page.set(SETTINGS_KEY, reference);
+        } else {
+            page.remove(SETTINGS_KEY);
+        }
+    }
+    let mut output = Vec::new();
+    doc.save_to(&mut output)
+        .map_err(|_| EngineError::EditFailed)?;
+    Ok(output)
+}
 
 fn content(doc: &Document, page: lopdf::ObjectId) -> Result<Content<Vec<Operation>>, EngineError> {
     let bytes = doc
@@ -113,6 +161,9 @@ pub(crate) fn remove(bytes: &[u8], targets: &[i32]) -> Result<Vec<u8>, EngineErr
             .and_then(Object::as_dict_mut)
             .map_err(|_| EngineError::EditFailed)?
             .set("Contents", contents);
+        doc.get_dictionary_mut(page)
+            .map_err(|_| EngineError::EditFailed)?
+            .remove(SETTINGS_KEY);
     }
     let mut output = Vec::new();
     doc.save_to(&mut output)

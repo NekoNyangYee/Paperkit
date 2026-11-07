@@ -1,0 +1,21 @@
+[package]
+name = "paperkit-api"
+version = "0.1.0"
+edition.workspace = true
+publish = false
+
+[dependencies]
+axum = "0.8.9"
+rusqlite = { version = "0.41.1", features = ["bundled", "backup"] }
+serde.workspace = true
+serde_json = "1"
+sha2 = "0.10"
+reqwest = { version = "0.13", default-features = false, features = ["rustls", "json"] }
+base64 = "0.22"
+tokio = { version = "1", features = ["macros", "rt-multi-thread", "net", "signal", "time"] }
+tower-http = { version = "0.6", features = ["cors", "limit", "timeout"] }
+uuid = { version = "1", features = ["v4", "serde"] }
+
+[dev-dependencies]
+tempfile = "3"
+tower = { version = "0.5", features = ["util"] }

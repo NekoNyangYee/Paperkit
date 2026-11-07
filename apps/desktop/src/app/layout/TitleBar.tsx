@@ -3,11 +3,11 @@ import { useEffect, useState } from "react";
 import { isTauri } from "@tauri-apps/api/core";
 import { getCurrentWindow } from "@tauri-apps/api/window";
 import { Minus, Square, Copy, X } from "lucide-react";
-import { VersionDialog } from "@/features/about/components/VersionDialog";
 import { MessageDialog } from "@/shared/ui/MessageDialog";
 import appIcon from "../../../app-icon.svg";
 import { WorkspaceTabs } from "./WorkspaceTabs";
 import { useFileStore } from "@/features/file-input/model/file-store";
+import { AccountControl } from "@/features/auth/components/AccountControl";
 
 export function TitleBar() {
   const persistenceError = useFileStore((state) => state.persistenceError);
@@ -55,7 +55,7 @@ export function TitleBar() {
           <span className="pointer-events-none text-sm font-semibold">Paperkit</span>
         </div>
         <WorkspaceTabs />
-        <VersionDialog />
+        <AccountControl />
         {(
           [
             { action: "minimize", label: "창 최소화", Icon: Minus },

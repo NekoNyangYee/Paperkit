@@ -4,6 +4,11 @@ import { openUrl } from "@tauri-apps/plugin-opener";
 import { VersionDialog } from "./VersionDialog";
 import { downloadUpdate, installUpdate } from "@/features/about/lib/updater";
 import { registerExitGuard } from "@/shared/desktop/app-exit";
+import { useState } from "react";
+function ControlledVersionDialog() {
+  const [open, setOpen] = useState(false);
+  return <VersionDialog open={open} onOpenChange={setOpen} />;
+}
 vi.mock("@/features/about/lib/updater", () => ({
   downloadUpdate: vi.fn().mockResolvedValue(undefined),
   installUpdate: vi.fn().mockResolvedValue(undefined),
@@ -35,7 +40,7 @@ it("shows installed version and a new release without rendering remote HTML", as
       }),
     }),
   );
-  render(<VersionDialog />);
+  render(<ControlledVersionDialog />);
   fireEvent.click(screen.getByRole("button", { name: "앱 버전 확인" }));
   await screen.findByText("현재 버전 0.1.0");
   expect(screen.getByRole("img", { name: "Paperkit 로고" })).toBeTruthy();

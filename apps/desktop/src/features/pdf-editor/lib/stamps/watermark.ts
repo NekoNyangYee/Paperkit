@@ -1,5 +1,17 @@
 import { canvasContext, canvasPng } from "./canvas";
 
+export function restoredWatermarkImage(source: string | null | undefined): File | null {
+  if (!source?.startsWith("data:image/png;base64,") || source.length > 6 * 1024 * 1024) return null;
+  try {
+    const bytes = Uint8Array.from(atob(source.slice("data:image/png;base64,".length)), (value) =>
+      value.charCodeAt(0),
+    );
+    return new File([bytes], "watermark.png", { type: "image/png" });
+  } catch {
+    return null;
+  }
+}
+
 export interface WatermarkOptions {
   kind: "text" | "image";
   text: string;

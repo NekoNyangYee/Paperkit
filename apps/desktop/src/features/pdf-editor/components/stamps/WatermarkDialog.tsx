@@ -14,6 +14,7 @@ import { useDialogClose } from "@/shared/ui/use-dialog-close";
 import type { PreviewPage, EditAction } from "@/shared/pdf/types";
 import {
   DEFAULT_WATERMARK_OPTIONS,
+  restoredWatermarkImage,
   WATERMARK_MODE_DEFAULTS,
   watermarkBounds,
   watermarkPng,
@@ -41,12 +42,25 @@ export function WatermarkDialog({
     description:
       "입력한 텍스트와 선택한 이미지, 색상, 투명도, 크기, 각도, 적용 범위를 처음 값으로 되돌릴까요?",
   });
-  const [options, setOptions] = useState<WatermarkOptions>(() => ({
-    ...DEFAULT_WATERMARK_OPTIONS,
-  }));
-  const [enabled, setEnabled] = useState((page.text.watermarkPages?.length ?? 0) > 0);
-  const [scope, setScope] = useState<"all" | "current">("all");
-  const [size, setSize] = useState<number>(WATERMARK_MODE_DEFAULTS.text.size);
+  const saved = page.text.watermarkSettings;
+  const [options, setOptions] = useState<WatermarkOptions>(() =>
+    saved
+      ? {
+          kind: saved.kind,
+          text: saved.text,
+          image: restoredWatermarkImage(saved.image),
+          opacity: saved.opacity,
+          angle: saved.angle,
+          color: saved.color,
+          date: saved.date,
+        }
+      : { ...DEFAULT_WATERMARK_OPTIONS },
+  );
+  const [enabled, setEnabled] = useState(
+    page.text.watermarkPages?.includes(page.pageIndex) ?? false,
+  );
+  const [scope, setScope] = useState<"all" | "current">(saved?.scope ?? "all");
+  const [size, setSize] = useState<number>(saved?.size ?? WATERMARK_MODE_DEFAULTS.text.size);
   const [background, setBackground] = useState(page.imageUrl);
   const [backgroundReady, setBackgroundReady] = useState(!page.text.watermarkObjects?.length);
   const [backgroundError, setBackgroundError] = useState<string | null>(null);
@@ -175,6 +189,17 @@ export function WatermarkDialog({
               page: target,
               png: (await watermarkPng(options, preview.source)).png,
               widthRatio: size / 100,
+              settings: {
+                kind: options.kind,
+                text: options.text,
+                image: options.kind === "image" ? preview.source.url : null,
+                opacity: options.opacity,
+                angle: options.angle,
+                color: options.color,
+                date: options.date,
+                size,
+                scope,
+              },
             }
           : { kind: "removeWatermark", page: target };
       if (await onApply(action)) close();

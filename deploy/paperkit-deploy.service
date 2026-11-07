@@ -1,0 +1,14 @@
+[Unit]
+Description=Deploy CI-verified Paperkit backend
+Wants=network-online.target
+After=network-online.target docker.service tailscaled.service
+Requires=docker.service
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/python3 /usr/local/lib/paperkit/auto-update.py --root /home/thkim/paperkit-backend
+TimeoutStartSec=45min
+UMask=0077
+Nice=10
+IOSchedulingClass=best-effort
+IOSchedulingPriority=7

@@ -10,13 +10,17 @@ const controls = vi.hoisted(() => ({
 vi.mock("@tauri-apps/api/core", () => ({ isTauri: () => true }));
 vi.mock("@tauri-apps/api/window", () => ({ getCurrentWindow: () => controls }));
 vi.mock("@/features/about/components/VersionDialog", () => ({
-  VersionDialog: () => <button>앱 정보</button>,
+  VersionDialog: () => null,
 }));
 import { TitleBar } from "./TitleBar";
 afterEach(cleanup);
 it("keeps app info outside the drag region and requests close without destroying the window", async () => {
   render(<TitleBar />);
+  expect(screen.queryByRole("button", { name: "앱 버전 확인" })).toBeNull();
+  expect(screen.queryByText("앱 정보")).toBeNull();
+  fireEvent.click(screen.getByRole("button", { name: "로그인" }));
   expect(screen.getByText("앱 정보").closest("[data-tauri-drag-region]")).toBeNull();
+  fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
   fireEvent.click(screen.getByRole("button", { name: "창 최소화" }));
   fireEvent.click(screen.getByRole("button", { name: "창 최대화" }));
   fireEvent.click(screen.getByRole("button", { name: "앱 닫기" }));

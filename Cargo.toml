@@ -1,5 +1,5 @@
 [workspace]
-members = ["apps/desktop/src-tauri", "crates/pdf-core"]
+members = ["apps/desktop/src-tauri", "apps/backend", "crates/pdf-core"]
 resolver = "2"
 
 [workspace.package]

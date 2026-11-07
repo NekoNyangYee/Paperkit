@@ -26,6 +26,7 @@ pub struct TextObject {
 #[derive(Debug, Clone, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct PageText {
+    pub watermark_settings: Option<crate::editing::WatermarkSettings>,
     pub watermark_pages: Vec<i32>,
     pub watermark_objects: Vec<usize>,
     pub objects: Vec<TextObject>,

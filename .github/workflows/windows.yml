@@ -86,6 +86,9 @@ jobs:
     timeout-minutes: 45
     env:
       CARGO_TERM_COLOR: always
+      VITE_SUPABASE_URL: ${{ vars.VITE_SUPABASE_URL }}
+      VITE_SUPABASE_PUBLISHABLE_KEY: ${{ vars.VITE_SUPABASE_PUBLISHABLE_KEY }}
+      VITE_API_BASE_URL: ${{ vars.VITE_API_BASE_URL }}
     steps:
       - uses: actions/checkout@v4
         with:
@@ -94,6 +97,8 @@ jobs:
       - uses: dtolnay/rust-toolchain@stable
       - uses: Swatinem/rust-cache@v2
       - uses: ./.github/actions/setup-native
+      - name: Validate production login configuration
+        run: node scripts/check-auth-env.mjs
       - name: Build Windows installer
         working-directory: apps/desktop
         run: node node_modules/@tauri-apps/cli/tauri.js build --ci --bundles nsis -- --locked

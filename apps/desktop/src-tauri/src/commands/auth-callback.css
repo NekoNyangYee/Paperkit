@@ -1,0 +1,92 @@
+:root {
+  font-family: "Segoe UI", "Malgun Gothic", sans-serif;
+  color: #292524;
+  background: #f6f5f1;
+  font-synthesis: none;
+  -webkit-font-smoothing: antialiased;
+}
+* {
+  box-sizing: border-box;
+}
+body {
+  margin: 0;
+  min-height: 100vh;
+  min-height: 100svh;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+}
+.card {
+  width: min(100%, 420px);
+  padding: 36px 32px 28px;
+  text-align: center;
+  background: #fff;
+  border: 1px solid #e7e5e4;
+  border-radius: 20px;
+  box-shadow: 0 8px 32px #29252408;
+  animation: appear 180ms ease-out both;
+}
+.brand {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font-size: 15px;
+  font-weight: 650;
+  letter-spacing: -0.3px;
+}
+.brand svg {
+  width: 30px;
+  height: 30px;
+}
+.divider {
+  width: 32px;
+  height: 3px;
+  margin: 28px auto;
+  border-radius: 8px;
+  background: #064e3b;
+}
+h1 {
+  margin: 0;
+  font-size: 20px;
+  font-weight: 650;
+  line-height: 1.5;
+  letter-spacing: -0.7px;
+}
+p {
+  margin: 12px 0 0;
+  color: #78716c;
+  font-size: 13px;
+  line-height: 1.8;
+  word-break: keep-all;
+}
+.hint {
+  margin-top: 28px;
+  padding: 12px;
+  border-radius: 10px;
+  background: #f5f5f4;
+  color: #57534e;
+  font-size: 12px;
+}
+@keyframes appear {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .card {
+    animation: none;
+  }
+}
+@media (max-width: 400px) {
+  .card {
+    padding: 28px 20px 24px;
+  }
+  h1 {
+    font-size: 18px;
+  }
+}

@@ -14,8 +14,21 @@ import { downloadUpdate, installUpdate } from "@/features/about/lib/updater";
 import { approveAppExit } from "@/shared/desktop/app-exit";
 import { PrivacyPolicy } from "./PrivacyPolicy";
 
-export function VersionDialog() {
-  const [open, setOpen] = useState(false);
+export function VersionDialog({
+  open: controlledOpen,
+  onOpenChange,
+  hideTrigger = false,
+}: {
+  open?: boolean;
+  onOpenChange?: (open: boolean) => void;
+  hideTrigger?: boolean;
+} = {}) {
+  const [internalOpen, setInternalOpen] = useState(false);
+  const open = controlledOpen ?? internalOpen;
+  function setOpen(value: boolean) {
+    setInternalOpen(value);
+    onOpenChange?.(value);
+  }
   const [dismissedTag, setDismissedTag] = useState<string | null>(null);
   const [version, setVersion] = useState<string | null>(null);
   const [release, setRelease] = useState<Awaited<ReturnType<typeof latestRelease>> | null>(null);
@@ -87,7 +100,9 @@ export function VersionDialog() {
   return (
     <>
       <div className="relative flex h-full items-center">
-        <IconButton icon={Info} label="앱 버전 확인" onClick={() => changeOpen(true)} />
+        {!hideTrigger && (
+          <IconButton icon={Info} label="앱 버전 확인" onClick={() => changeOpen(true)} />
+        )}
         {!open &&
           comparison !== null &&
           comparison > 0 &&

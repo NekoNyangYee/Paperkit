@@ -7,6 +7,17 @@ export interface EditState {
   canUndo: boolean;
   canRedo: boolean;
 }
+export interface WatermarkSettings {
+  kind: "text" | "image";
+  text: string;
+  image: string | null;
+  opacity: number;
+  angle: number;
+  color: string;
+  date: string | null;
+  size: number;
+  scope: "all" | "current";
+}
 export interface TextObject {
   fontObjectId?: number;
   id: number;
@@ -55,7 +66,13 @@ export type EditAction =
   | { kind: "pasteGraphic"; page: number; source: number[] }
   | { kind: "pasteImage"; page: number; png: number[] }
   | { kind: "addSignature"; page: number; png: number[] }
-  | { kind: "addWatermark"; page: number | null; png: number[]; widthRatio: number }
+  | {
+      kind: "addWatermark";
+      page: number | null;
+      png: number[];
+      widthRatio: number;
+      settings?: WatermarkSettings;
+    }
   | { kind: "removeWatermark"; page: number | null }
   | {
       kind: "page";
@@ -136,6 +153,7 @@ export interface PreviewPage {
   state: EditState;
   text: {
     watermarkPages?: number[];
+    watermarkSettings?: WatermarkSettings | null;
     watermarkObjects?: number[];
     objects: TextObject[];
     graphics?: GraphicObject[];

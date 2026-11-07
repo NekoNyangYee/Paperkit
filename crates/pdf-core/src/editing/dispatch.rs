@@ -33,7 +33,14 @@ pub(super) fn apply(
             page,
             png,
             width_ratio,
-        } => super::stamps::insert(pdfium, original, page, &png, Some(width_ratio))?,
+            settings,
+        } => {
+            if settings.as_ref().is_some_and(|value| !value.valid()) {
+                return Err(PreviewError::UnsupportedText);
+            }
+            let bytes = super::stamps::insert(pdfium, original, page, &png, Some(width_ratio))?;
+            crate::content_stream::watermarks::write_settings(&bytes, page, settings.as_ref())?
+        }
         EditAction::Page {
             page,
             operation,

@@ -1,5 +1,5 @@
 //! Desktop startup, managed state and IPC registration.
-use crate::commands::{files, preview, updates};
+use crate::commands::{auth, files, preview, updates};
 use tauri::Manager;
 
 pub fn run() {
@@ -9,6 +9,7 @@ pub fn run() {
         .plugin(tauri_plugin_store::Builder::default().build())
         .manage(files::AppState::default())
         .manage(updates::UpdateState::default())
+        .manage(auth::AuthState::default())
         .setup(|app| {
             #[cfg(debug_assertions)]
             let library = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -29,6 +30,11 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
+            auth::begin_google_login,
+            auth::finish_google_login,
+            auth::cancel_google_login,
+            auth::read_auth_refresh_token,
+            auth::write_auth_refresh_token,
             updates::download_update,
             updates::install_update,
             files::receive_file_input,

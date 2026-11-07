@@ -1,0 +1,11 @@
+[Unit]
+Description=Check Paperkit main and CI every two minutes
+
+[Timer]
+OnBootSec=90s
+OnUnitInactiveSec=2min
+RandomizedDelaySec=15s
+Unit=paperkit-deploy.service
+
+[Install]
+WantedBy=timers.target

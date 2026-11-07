@@ -1,6 +1,37 @@
 //! Serializable editing contract. No PDFium or document mutation.
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WatermarkSettings {
+    pub kind: String,
+    pub text: String,
+    pub image: Option<String>,
+    pub opacity: f32,
+    pub angle: f32,
+    pub color: String,
+    pub date: Option<String>,
+    pub size: f32,
+    pub scope: String,
+}
+impl WatermarkSettings {
+    pub(crate) fn valid(&self) -> bool {
+        matches!(self.kind.as_str(), "text" | "image")
+            && self.text.len() <= 32768
+            && self.image.as_ref().is_none_or(|image| {
+                image.len() <= 6 * 1024 * 1024 && image.starts_with("data:image/png;base64,")
+            })
+            && (self.kind != "image" || self.image.is_some())
+            && (5.0..=100.0).contains(&self.opacity)
+            && (-90.0..=90.0).contains(&self.angle)
+            && (10.0..=90.0).contains(&self.size)
+            && self.color.len() == 7
+            && self.color.starts_with('#')
+            && self.color.bytes().skip(1).all(|b| b.is_ascii_hexdigit())
+            && self.date.as_ref().is_none_or(|date| date.len() <= 64)
+            && matches!(self.scope.as_str(), "all" | "current")
+    }
+}
 #[derive(Clone, Debug, Serialize, Default)]
 #[serde(rename_all = "camelCase")]
 pub struct EditState {
@@ -41,6 +72,8 @@ pub enum EditAction {
         png: Vec<u8>,
         #[serde(rename = "widthRatio")]
         width_ratio: f32,
+        #[serde(default)]
+        settings: Option<WatermarkSettings>,
     },
     Page {
         page: i32,

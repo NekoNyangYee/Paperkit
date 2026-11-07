@@ -9,5 +9,5 @@ pub(crate) mod movement;
 mod replace;
 mod stamps;
 pub(crate) mod verification;
-pub use action::{EditAction, EditState};
+pub use action::{EditAction, EditState, WatermarkSettings};
 pub(crate) use history::History;

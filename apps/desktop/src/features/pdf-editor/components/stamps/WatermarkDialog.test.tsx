@@ -5,7 +5,7 @@ import { afterEach, beforeEach, expect, it, vi } from "vitest";
 import { WatermarkDialog } from "./WatermarkDialog";
 import { invoke } from "@tauri-apps/api/core";
 import { watermarkPng, watermarkSource } from "@/features/pdf-editor/lib/stamps/watermark";
-import type { PreviewPage } from "@/shared/pdf/types";
+import type { EditAction, PreviewPage } from "@/shared/pdf/types";
 import placeholderUrl from "@/features/pdf-editor/lib/stamps/watermark-placeholder.svg";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
@@ -34,6 +34,98 @@ const source = { ...image, canvas: document.createElement("canvas") };
 beforeEach(() => {
   vi.mocked(watermarkSource).mockResolvedValue(source);
   vi.mocked(watermarkPng).mockResolvedValue(image);
+});
+
+it("restores the applied text settings and switch after closing and reopening", async () => {
+  const onApply = vi.fn().mockResolvedValue(true);
+  const view = render(<WatermarkDialog page={page} onApply={onApply} onClose={vi.fn()} />);
+  fireEvent.click(screen.getByRole("switch", { name: "워터마크 사용" }));
+  fireEvent.change(screen.getByLabelText("워터마크 텍스트"), {
+    target: { value: "보관할 워터마크" },
+  });
+  slide("워터마크 투명도", 40);
+  slide("워터마크 각도", 15);
+  slide("워터마크 크기", 75);
+  await waitFor(() =>
+    expect(
+      (screen.getByRole("button", { name: "워터마크 적용" }) as HTMLButtonElement).disabled,
+    ).toBe(false),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "워터마크 적용" }));
+  await waitFor(() => expect(onApply).toHaveBeenCalledOnce());
+  const action = onApply.mock.calls[0]![0] as Extract<EditAction, { kind: "addWatermark" }>;
+  view.unmount();
+  render(
+    <WatermarkDialog
+      page={{
+        ...page,
+        text: { ...page.text, watermarkPages: [2], watermarkSettings: action.settings },
+      }}
+      onApply={onApply}
+      onClose={vi.fn()}
+    />,
+  );
+  expect(screen.getByRole("switch", { name: "워터마크 사용" }).getAttribute("aria-checked")).toBe(
+    "true",
+  );
+  expect((screen.getByLabelText("워터마크 텍스트") as HTMLTextAreaElement).value).toBe(
+    "보관할 워터마크",
+  );
+  expect(
+    screen.getByRole("slider", { name: "워터마크 투명도" }).getAttribute("aria-valuenow"),
+  ).toBe("40");
+  expect(screen.getByRole("slider", { name: "워터마크 각도" }).getAttribute("aria-valuenow")).toBe(
+    "15",
+  );
+  expect(screen.getByRole("slider", { name: "워터마크 크기" }).getAttribute("aria-valuenow")).toBe(
+    "75",
+  );
+  await waitFor(() =>
+    expect(watermarkSource).toHaveBeenLastCalledWith(
+      expect.objectContaining({ text: "보관할 워터마크" }),
+    ),
+  );
+});
+
+it("restores image content and leaves unmarked pages switched off", async () => {
+  const saved = {
+    kind: "image" as const,
+    text: "",
+    image: "data:image/png;base64,AQID",
+    opacity: 45,
+    angle: 0,
+    color: "#64748b",
+    date: null,
+    size: 65,
+    scope: "current" as const,
+  };
+  const view = render(
+    <WatermarkDialog
+      page={{ ...page, text: { ...page.text, watermarkPages: [2], watermarkSettings: saved } }}
+      onApply={vi.fn()}
+      onClose={vi.fn()}
+    />,
+  );
+  await waitFor(() =>
+    expect(watermarkSource).toHaveBeenCalledWith(
+      expect.objectContaining({ kind: "image", image: expect.any(File) }),
+    ),
+  );
+  expect(screen.getByText("watermark.png")).toBeTruthy();
+  expect(screen.getByRole("combobox", { name: "워터마크 적용 범위" }).textContent).toContain(
+    "현재 페이지",
+  );
+  view.unmount();
+  render(
+    <WatermarkDialog
+      page={{ ...page, text: { ...page.text, watermarkPages: [0] } }}
+      onApply={vi.fn()}
+      onClose={vi.fn()}
+    />,
+  );
+  expect(screen.getByRole("switch", { name: "워터마크 사용" }).getAttribute("aria-checked")).toBe(
+    "false",
+  );
 });
 
 it("previews and applies a date beside text, and restores the original text when disabled", async () => {
@@ -109,6 +201,7 @@ it("previews text over the real page and submits all pages as one watermark acti
       page: null,
       png: image.png,
       widthRatio: 0.7,
+      settings: expect.objectContaining({ opacity: 35, angle: -15, size: 70, scope: "all" }),
     }),
   );
   await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
@@ -148,6 +241,12 @@ it("selects an image, targets the current page, and preserves settings after a r
     page: 2,
     png: image.png,
     widthRatio: 0.8,
+    settings: expect.objectContaining({
+      kind: "image",
+      image: source.url,
+      size: 80,
+      scope: "current",
+    }),
   });
   expect(screen.getByText("brand.png")).toBeTruthy();
   expect(watermarkSource).toHaveBeenLastCalledWith(
@@ -239,6 +338,7 @@ it("never mixes a late text preview with the selected image when applying over a
     page: null,
     png: image.png,
     widthRatio: 0.8,
+    settings: expect.objectContaining({ kind: "image", size: 80, scope: "all" }),
   });
 });
 
