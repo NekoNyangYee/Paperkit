@@ -13,6 +13,64 @@ fn fixture() -> (TempDir, Database) {
     let database = Database::open(&directory.path().join("test.sqlite3")).unwrap();
     (directory, database)
 }
+
+#[tokio::test]
+async fn signature_migration_preserves_existing_tools_and_documents() {
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("test.sqlite3");
+    let mut old = rusqlite::Connection::open(&path).unwrap();
+    for (index, sql) in [
+        include_str!("../migrations/001_core.sql"),
+        include_str!("../migrations/002_ownership.sql"),
+        include_str!("../migrations/003_library.sql"),
+    ]
+    .iter()
+    .enumerate()
+    {
+        let tx = old.transaction().unwrap();
+        tx.execute_batch(sql).unwrap();
+        tx.execute(
+            "INSERT INTO schema_migrations VALUES (?1,?2,0)",
+            rusqlite::params![index as i64 + 1, db::sha256(sql.as_bytes())],
+        )
+        .unwrap();
+        tx.commit().unwrap();
+    }
+    old.pragma_update(None, "application_id", 0x504b4954)
+        .unwrap();
+    old.pragma_update(None, "user_version", 3).unwrap();
+    let document = db::create_document(&old, OWNER, document()).unwrap();
+    old.execute(
+        "INSERT INTO library_tools VALUES (?1,?2,'기존 문구','text','보존할 내용',123)",
+        rusqlite::params!["old-tool", OWNER],
+    )
+    .unwrap();
+    drop(old);
+    let migrated = Database::open(&path).unwrap();
+    migrated
+        .run(move |conn| {
+            let tools = paperkit_api::library::tools(conn, OWNER)?;
+            assert_eq!(tools.len(), 1);
+            assert_eq!(tools[0].id, "old-tool");
+            assert_eq!(tools[0].input.content, "보존할 내용");
+            assert_eq!(tools[0].created_at, 123);
+            assert_eq!(
+                db::get_document(conn, OWNER, &document.id)?
+                    .input
+                    .display_name,
+                "원본.pdf"
+            );
+            assert_eq!(
+                conn.query_row("PRAGMA integrity_check", [], |r| r.get::<_, String>(0))?,
+                "ok"
+            );
+            Ok(())
+        })
+        .await
+        .unwrap();
+    drop(migrated);
+    Database::open(&path).unwrap();
+}
 fn document() -> DocumentInput {
     DocumentInput {
         source_path: "C:\\문서\\원본.pdf".into(),
@@ -84,7 +142,7 @@ async fn migration_is_repeatable_and_backup_preserves_committed_state() {
             assert_eq!(
                 conn.query_row("SELECT count(*) FROM schema_migrations", [], |r| r
                     .get::<_, i64>(0))?,
-                2
+                db::SCHEMA_VERSION as i64
             );
             Ok(())
         })

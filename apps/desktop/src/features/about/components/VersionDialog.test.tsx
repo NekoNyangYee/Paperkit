@@ -113,7 +113,9 @@ it("shows download progress, prevents duplicate requests and offers retry on fai
   fireEvent.click(downloading);
   expect(downloadUpdate).toHaveBeenCalledOnce();
   await act(async () => fail(new Error("다운로드가 중단되었습니다.")));
-  await screen.findByText("다운로드가 중단되었습니다.");
+  await screen.findByText(
+    "업데이트를 확인하지 못했어요. 지금 버전으로 계속 사용하고 나중에 다시 시도해 주세요.",
+  );
   expect((screen.getByRole("button", { name: "업데이트" }) as HTMLButtonElement).disabled).toBe(
     false,
   );

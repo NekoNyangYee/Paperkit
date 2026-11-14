@@ -2,6 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { X } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/shared/ui/dialog";
+import { userErrorMessage } from "@/shared/lib/errors";
 import { IconButton } from "@/shared/ui/icon-button";
 import { Button } from "@/shared/ui/button";
 import { Switch } from "@/shared/ui/switch";
@@ -30,11 +31,13 @@ export function WatermarkDialog({
   onClose,
   onApply,
   applyError,
+  initialText,
 }: {
   page: PreviewPage;
   onClose: () => void;
   onApply: (action: EditAction) => Promise<boolean>;
   applyError?: string | null;
+  initialText?: string;
 }) {
   const { open, close } = useDialogClose(onClose);
   const resetDialog = useConfirmDialog({
@@ -42,7 +45,7 @@ export function WatermarkDialog({
     description:
       "입력한 텍스트와 선택한 이미지, 색상, 투명도, 크기, 각도, 적용 범위를 처음 값으로 되돌릴까요?",
   });
-  const saved = page.text.watermarkSettings;
+  const saved = initialText === undefined ? page.text.watermarkSettings : undefined;
   const [options, setOptions] = useState<WatermarkOptions>(() =>
     saved
       ? {
@@ -54,16 +57,17 @@ export function WatermarkDialog({
           color: saved.color,
           date: saved.date,
         }
-      : { ...DEFAULT_WATERMARK_OPTIONS },
+      : { ...DEFAULT_WATERMARK_OPTIONS, text: initialText ?? DEFAULT_WATERMARK_OPTIONS.text },
   );
   const [enabled, setEnabled] = useState(
-    page.text.watermarkPages?.includes(page.pageIndex) ?? false,
+    initialText !== undefined || (page.text.watermarkPages?.includes(page.pageIndex) ?? false),
   );
   const [scope, setScope] = useState<"all" | "current">(saved?.scope ?? "all");
   const [size, setSize] = useState<number>(saved?.size ?? WATERMARK_MODE_DEFAULTS.text.size);
   const [background, setBackground] = useState(page.imageUrl);
   const [backgroundReady, setBackgroundReady] = useState(!page.text.watermarkObjects?.length);
   const [backgroundError, setBackgroundError] = useState<string | null>(null);
+  const [backgroundRetry, setBackgroundRetry] = useState(0);
   const content = useMemo(
     () => ({
       kind: options.kind,
@@ -105,15 +109,12 @@ export function WatermarkDialog({
         }
       })
       .catch(() => {
-        if (!disposed)
-          setBackgroundError(
-            "기존 워터마크를 제외한 미리보기를 불러오지 못했습니다. 창을 닫고 다시 시도해 주세요.",
-          );
+        if (!disposed) setBackgroundError("미리보기를 준비하지 못했어요. 다시 불러와 주세요.");
       });
     return () => {
       disposed = true;
     };
-  }, [page]);
+  }, [page, backgroundRetry]);
   useEffect(() => {
     if (!enabled) return;
     let disposed = false;
@@ -129,7 +130,7 @@ export function WatermarkDialog({
       .catch((cause: unknown) => {
         if (!disposed) {
           setPreview(null);
-          setError(cause instanceof Error ? cause.message : "이미지를 읽지 못했습니다.");
+          setError(userErrorMessage(cause, "image"));
         }
       });
     return () => {
@@ -205,7 +206,7 @@ export function WatermarkDialog({
       if (await onApply(action)) close();
       else setError("워터마크 변경을 적용하지 못했습니다. 다시 시도해 주세요.");
     } catch (cause) {
-      setError(cause instanceof Error ? cause.message : "워터마크 변경을 적용하지 못했습니다.");
+      setError(userErrorMessage(cause, "watermark"));
     } finally {
       applying.current = false;
       setPending(false);
@@ -224,7 +225,7 @@ export function WatermarkDialog({
             <DialogTitle className="text-lg font-semibold">워터마크</DialogTitle>
             <IconButton icon={X} label="워터마크 창 닫기" disabled={pending} onClick={close} />
           </div>
-          <DialogDescription className="mt-1 text-sm text-stone-500">
+          <DialogDescription className="sr-only">
             워터마크를 켜서 추가·교체하거나, 꺼서 제거하세요. 적용 전 미리보기로 확인할 수 있습니다.
           </DialogDescription>
         </header>
@@ -336,19 +337,11 @@ export function WatermarkDialog({
                         "미리보기용 기본 이미지입니다. 적용하려면 이미지 파일을 선택하세요."
                       }
                     >
-                      {options.image?.name ??
-                        "기본 이미지 미리보기 · 적용할 이미지 파일을 선택하세요."}
+                      {options.image?.name ?? "이미지 선택"}
                     </span>
                   </label>
                 )}
               </>
-            )}
-            {!enabled && (
-              <p className="text-xs leading-5 text-stone-500">
-                {hasWatermark
-                  ? "적용하면 선택한 범위의 워터마크가 제거됩니다. 다른 이미지와 서명은 유지됩니다."
-                  : "워터마크를 켜면 텍스트나 이미지로 만들 수 있습니다."}
-              </p>
             )}
             <div>
               <div className="grid grid-cols-2 gap-x-4 gap-y-3">
@@ -474,13 +467,17 @@ export function WatermarkDialog({
               {applyError ?? error ?? backgroundError}
             </p>
           )}
-          {!enabled && !page.text.watermarkPages?.length && (
-            <p className="text-[11px] leading-5 text-stone-400">
-              이전 버전에서 넣은 워터마크는 PDF 화면에서 이미지를 선택해 삭제해 주세요.
-            </p>
+          {backgroundError && (
+            <Button
+              variant="ghost"
+              size="sm"
+              disabled={pending}
+              onClick={() => setBackgroundRetry((value) => value + 1)}
+            >
+              미리보기 다시 불러오기
+            </Button>
           )}
-          <div className="flex items-center justify-between gap-3">
-            <span className="text-[11px] text-stone-400">적용 버튼을 눌러 변경을 반영합니다.</span>
+          <div className="flex justify-end gap-3">
             <div className="flex shrink-0 gap-2">
               <Button variant="outline" disabled={pending} onClick={close}>
                 취소

@@ -9,6 +9,32 @@ afterEach(() => {
   cleanup();
   vi.unstubAllGlobals();
 });
+
+it("drags an unselected block directly from its border and leaves interior text selection available", async () => {
+  vi.stubGlobal(
+    "PointerEvent",
+    class extends MouseEvent {
+      pointerId = 1;
+    },
+  );
+  mocks.invoke.mockReset().mockResolvedValue("data:image/png;base64,AA==");
+  const props = selectedProps();
+  const move = vi.fn(async () => true);
+  render(<TextPage {...props} selected={null} onMove={move} />);
+  const polygon = screen.getByRole("button", {
+    name: "텍스트 선택: 첫째",
+  }) as unknown as SVGPolygonElement;
+  polygon.setPointerCapture = vi.fn();
+  fireEvent.pointerMove(polygon, { clientX: 40, clientY: 20 });
+  expect(polygon.style.cursor).toBe("text");
+  fireEvent.pointerMove(polygon, { clientX: 10, clientY: 20 });
+  expect(polygon.style.cursor).toBe("move");
+  fireEvent.pointerDown(polygon, { clientX: 10, clientY: 20, button: 0 });
+  fireEvent.pointerUp(polygon, { clientX: 30, clientY: 40 });
+  await waitFor(() => expect(move).toHaveBeenCalledWith(20, 12, props.selected));
+  fireEvent.click(polygon);
+  expect(props.onBeginEdit).not.toHaveBeenCalled();
+});
 function fixture(): PreviewPage {
   const objects: TextObject[] = [0, 1].map((id) => ({
     id,
@@ -231,18 +257,19 @@ it("moves downstream content locally as a paragraph grows and reuses layers whil
   const group = { ...props.page.text.groups![0], followingObjects: [1] };
   const selected = groupSelection(group, props.page.text.objects)!;
   const view = render(<TextPage {...props} selected={selected} mode="paragraph" inlineEditing />);
-  await screen.findByTestId("flowing-content");
-  await waitFor(() => expect(mocks.invoke).toHaveBeenCalledTimes(4));
-  expect(mocks.invoke).toHaveBeenCalledWith(
-    "editing_background",
-    expect.objectContaining({
-      objects: [0, 1],
-    }),
-  );
+  // Enter editing after the selected background/font, without preparing all followers.
+  await waitFor(() => expect(mocks.invoke).toHaveBeenCalledTimes(2));
+  expect(screen.queryByTestId("flowing-content")).toBeNull();
   const input = screen.getByRole("textbox");
   await waitFor(() => expect(input.style.fontFamily).not.toBe("sans-serif"));
   Object.defineProperty(input, "scrollHeight", { configurable: true, value: 84 });
   act(() => measure());
+  await screen.findByTestId("flowing-content");
+  await waitFor(() => expect(mocks.invoke).toHaveBeenCalledTimes(4));
+  expect(mocks.invoke).toHaveBeenCalledWith(
+    "editing_background",
+    expect.objectContaining({ objects: [0, 1] }),
+  );
   // Original one-row box is 28 px high; two added rows push the next block 56 px.
   expect(screen.getByTestId("flowing-content").style.transform).toBe("translateY(56px)");
   input.textContent = "입력 중인 문단";
@@ -276,7 +303,7 @@ it("shows the native failure and retries without losing the draft", async () => 
     .mockResolvedValue("data:image/png;base64,AA==");
   render(<TextPage {...selectedProps()} inlineEditing draft="작성 중인 내용" />);
   expect((await screen.findByRole("alert")).textContent).toContain(
-    "다른 페이지를 처리하고 있습니다.",
+    "앞선 작업을 마무리하고 있어요.",
   );
   expect(screen.getByTestId("inline-block").style.visibility).toBe("hidden");
   fireEvent.click(screen.getByRole("button", { name: "다시 시도" }));
@@ -351,7 +378,7 @@ it("reports an invalid layer instead of waiting indefinitely", async () => {
   mocks.invoke.mockReset().mockResolvedValue(undefined);
   render(<TextPage {...selectedProps()} inlineEditing />);
   expect((await screen.findByRole("alert")).textContent).toContain(
-    "이미지 응답이 올바르지 않습니다.",
+    "페이지를 아직 표시하지 못했어요.",
   );
   expect(screen.getByRole("button", { name: "다시 시도" })).toBeTruthy();
 });

@@ -39,6 +39,10 @@ beforeEach(() => {
   });
   mocks.auth.exchangeCodeForSession.mockResolvedValue({ data: { session }, error: null });
   mocks.auth.refreshSession.mockResolvedValue({ data: { session }, error: null });
+  mocks.auth.getSession.mockResolvedValue({ data: { session: null }, error: null });
+  mocks.auth.onAuthStateChange.mockReturnValue({
+    data: { subscription: { unsubscribe: vi.fn() } },
+  });
   mocks.auth.signOut.mockResolvedValue({ error: null });
 });
 
@@ -132,4 +136,14 @@ it("sign-out clears local credentials even when the auth network request fails",
     project: "https://project.supabase.co",
     refreshToken: null,
   });
+});
+
+it("reuses an existing SDK session during a development restore instead of rotating the OS token again", async () => {
+  mocks.auth.getSession.mockResolvedValue({ data: { session }, error: null });
+  const store = await import("./auth-store");
+  await store.initializeAuth();
+  expect(store.useAuthStore.getState().session?.user.id).toBe(session.user.id);
+  expect(mocks.auth.refreshSession).not.toHaveBeenCalled();
+  expect(mocks.invoke).not.toHaveBeenCalledWith("read_auth_refresh_token", expect.anything());
+  expect(mocks.auth.startAutoRefresh).toHaveBeenCalled();
 });

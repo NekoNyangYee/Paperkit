@@ -1,5 +1,6 @@
 import { TitleBar } from "@/app/layout/TitleBar";
-import { FileInput } from "@/features/file-input/components/FileInput";
+import { LibraryHome } from "@/features/library/components/LibraryHome";
+import { LibrarySync } from "@/features/library/components/LibrarySync";
 import { PdfPreview } from "@/features/pdf-editor/components/preview/PdfPreview";
 import { useFileStore } from "@/features/file-input/model/file-store";
 import { useEffect, useState } from "react";
@@ -16,6 +17,7 @@ export function App() {
   return (
     <div className="flex h-screen flex-col overflow-hidden">
       <TitleBar />
+      <LibrarySync />
       <div className="min-h-0 flex-1 overflow-auto">
         {tabs.map(
           (tab) =>
@@ -38,9 +40,9 @@ export function App() {
             role="tabpanel"
             id={`panel-${activeTabId}`}
             aria-labelledby={`tab-${activeTabId}`}
-            className="flex min-h-full items-center justify-center px-6 py-10 sm:px-12"
+            className="flex min-h-full flex-col px-6 py-7 sm:px-12"
           >
-            <FileInput />
+            <LibraryHome />
           </main>
         )}
       </div>

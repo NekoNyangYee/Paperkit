@@ -1,0 +1,13 @@
+{
+  "qpdf": {
+    "version": "12.4.2",
+    "url": "https://github.com/qpdf/qpdf/releases/download/v12.4.2/qpdf-12.4.2-msvc64.zip",
+    "sha256": "db87077e683630c1217e0e8f9a20a9749d952ab676e881c3689187763a5de25d",
+    "directory": "qpdf-12.4.2-msvc64"
+  },
+  "models": {
+    "revision": "87416418657359cb625c412a48b6e1d6d41c29bd",
+    "eng": "7d4322bd2a7749724879683fc3912cb542f19906c83bcc1a52132556427170b2",
+    "kor": "6b85e11d9bbf07863b97b3523b1b112844c43e713df8b66418a081fd1060b3b2"
+  }
+}

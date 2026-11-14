@@ -89,8 +89,9 @@ export function GraphicLayer({
           await navigator.clipboard.writeText(marker);
         }
       } else await navigator.clipboard.writeText(marker);
+      return true;
     } catch {
-      setError("객체를 클립보드에 복사하지 못했습니다. 다시 시도해 주세요.");
+      setError("복사를 마치지 못했어요. 항목을 다시 선택해 복사해 주세요.");
     } finally {
       copyingRef.current = false;
       setCopying(false);
@@ -108,18 +109,28 @@ export function GraphicLayer({
         await apply({ kind: "pasteImage", page: page.pageIndex, png });
       }
     } catch {
-      setError("클립보드의 이미지를 붙여넣지 못했습니다.");
+      setError("붙여넣기를 마치지 못했어요. 다시 복사하거나 이미지 삽입을 이용해 주세요.");
     }
   }
   useEffect(() => {
     if (!active) return;
     const copy = (event: ClipboardEvent) => {
-      if (!selected || disabled || committing || isTextInput(event.target)) return;
+      if (
+        event.defaultPrevented ||
+        !selected ||
+        disabled ||
+        committing ||
+        isTextInput(event.target)
+      )
+        return;
       event.preventDefault();
-      void copySelected();
+      void copySelected().then((ok) => {
+        if (ok && event.type === "cut")
+          void apply({ kind: "deleteGraphic", page: page.pageIndex, object: selected.id });
+      });
     };
     const pasteEvent = (event: ClipboardEvent) => {
-      if (disabled || committing || isTextInput(event.target)) return;
+      if (event.defaultPrevented || disabled || committing || isTextInput(event.target)) return;
       const source = recalledGraphic(event.clipboardData?.getData("text/plain") ?? "");
       const image = Array.from(event.clipboardData?.items ?? [])
         .find((item) => item.type.startsWith("image/"))
@@ -129,12 +140,64 @@ export function GraphicLayer({
       void paste(source, image);
     };
     document.addEventListener("copy", copy);
+    document.addEventListener("cut", copy);
     document.addEventListener("paste", pasteEvent);
     return () => {
       document.removeEventListener("copy", copy);
+      document.removeEventListener("cut", copy);
       document.removeEventListener("paste", pasteEvent);
     };
   }, [active, selected, disabled, committing, page, layers]);
+  useEffect(() => {
+    if (!active || !selected) return;
+    const key = (event: KeyboardEvent) => {
+      if (
+        event.defaultPrevented ||
+        event.isComposing ||
+        disabled ||
+        committing ||
+        isTextInput(event.target) ||
+        document.querySelector('[role="dialog"], [role="alertdialog"]')
+      )
+        return;
+      if (
+        event.target instanceof Element &&
+        event.target.closest('button,select,[role="combobox"],[role="listbox"],[role="option"]')
+      )
+        return;
+      if (event.key === "Escape") {
+        setId(null);
+        return;
+      }
+      if (event.key === "Delete" || event.key === "Backspace") {
+        event.preventDefault();
+        if (!event.repeat)
+          void apply({ kind: "deleteGraphic", page: page.pageIndex, object: selected.id });
+        return;
+      }
+      if (event.ctrlKey || event.metaKey || event.altKey) return;
+      const step = event.shiftKey ? 10 : 1;
+      const delta = {
+        ArrowLeft: [-step, 0],
+        ArrowRight: [step, 0],
+        ArrowUp: [0, -step],
+        ArrowDown: [0, step],
+      }[event.key];
+      if (!delta) return;
+      event.preventDefault();
+      if (event.repeat) return;
+      const original = graphicBox(selected.screenBounds);
+      const matrix = graphicTransform(selected, {
+        ...original,
+        left: original.left + delta[0],
+        top: original.top + delta[1],
+      });
+      if (matrix)
+        void apply({ kind: "transformGraphic", page: page.pageIndex, object: selected.id, matrix });
+    };
+    window.addEventListener("keydown", key);
+    return () => window.removeEventListener("keydown", key);
+  }, [active, selected, disabled, committing, page]);
   useEffect(() => {
     if (textSelected) setId(null);
   }, [textSelected]);
@@ -171,7 +234,7 @@ export function GraphicLayer({
       const [background, foreground] = await Promise.all([load(false), load(true)]);
       if (active) setLayers({ background, foreground });
     })().catch(() => {
-      if (active) setError("객체 이동 미리보기를 준비하지 못했습니다. 다시 선택해 주세요.");
+      if (active) setError("이동할 항목을 준비하지 못했어요. 다시 선택해 주세요.");
     });
     return () => {
       active = false;
@@ -189,7 +252,7 @@ export function GraphicLayer({
     } catch {
       setNext(null);
       setCommitting(false);
-      setError("변경 사항을 반영하지 못했습니다. 다시 시도해 주세요.");
+      setError("변경을 적용하지 못했어요. 항목을 다시 선택해 주세요.");
     }
   }
   function choose(object: GraphicObject) {
@@ -253,7 +316,7 @@ export function GraphicLayer({
       void apply({ kind: "transformGraphic", page: page.pageIndex, object: object.id, matrix });
     else {
       setNext(null);
-      setError("이 객체의 크기나 좌표를 변환할 수 없습니다.");
+      setError("이 항목의 크기를 바꾸기 어려워요. 다른 항목을 선택해 주세요.");
     }
   }
   const sorted = [...objects].sort((a, b) => {
@@ -319,7 +382,7 @@ export function GraphicLayer({
               fill="transparent"
               stroke="transparent"
               strokeWidth={6}
-              className="cursor-pointer outline-none hover:stroke-blue-400 focus-visible:stroke-blue-500"
+              className="cursor-move outline-none hover:stroke-blue-400 focus-visible:stroke-blue-500"
               visibility={id === o.id ? "hidden" : undefined}
               style={{
                 pointerEvents:

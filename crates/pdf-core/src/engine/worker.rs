@@ -8,27 +8,78 @@ use pdfium_render::prelude::*;
 use std::{collections::HashMap, fs::File, io::Read, path::PathBuf, sync::mpsc::Receiver};
 const MAX_FILE_BYTES: u64 = 128 * 1024 * 1024;
 pub(super) fn run(library: PathBuf, font_directory: PathBuf, receiver: Receiver<Request>) {
+    let ensemble = super::ensemble::Ensemble::new(
+        library
+            .parent()
+            .and_then(|p| p.parent())
+            .unwrap_or(std::path::Path::new("")),
+    );
     let pdfium = Pdfium::bind_to_library(library).map(Pdfium::new);
     // Sessions live after Pdfium and drop before it: no self-referential struct.
     let mut documents = HashMap::new();
+    let mut caches: HashMap<String, super::session_cache::SessionCache> = HashMap::new();
     while let Ok(request) = receiver.recv() {
         let session_id = match &request {
-            Request::CopyGraphic { id, .. }
+            Request::ExtractText { id, .. }
+            | Request::CopyGraphic { id, .. }
             | Request::Background { id, .. }
             | Request::Font { id, .. }
             | Request::Edit { id, .. }
             | Request::Render { id, .. }
             | Request::Release(id) => id.clone(),
         };
-        let (mut current, mut history, mut watermark_pages) =
+        let (mut current, mut history, mut watermark_pages, mut recovered) =
             documents.remove(&session_id).unwrap_or_else(|| {
                 (
                     None::<(String, PdfDocument<'_>)>,
                     History::default(),
                     Vec::new(),
+                    false,
                 )
             });
+        let mut cache = caches.remove(&session_id).unwrap_or_default();
         match request {
+            Request::ExtractText {
+                id,
+                revision,
+                page,
+                force_ocr,
+                reply,
+            } => {
+                let result = (|| {
+                    let (_, document) = current
+                        .as_ref()
+                        .filter(|(active, _)| *active == id)
+                        .ok_or(PreviewError::StaleObject)?;
+                    if history.state.revision != revision {
+                        return Err(PreviewError::StaleObject);
+                    }
+                    if !document
+                        .permissions()
+                        .can_extract_text_and_graphics()
+                        .unwrap_or(false)
+                    {
+                        return Err(PreviewError::UnsupportedText);
+                    }
+                    let target = document
+                        .pages()
+                        .get(page)
+                        .map_err(|_| PreviewError::InvalidPage)?;
+                    // Full-page extraction also reaches Form XObjects that the object editor
+                    // cannot address safely. OCR is for reading, never synthetic edit IDs.
+                    let text = target.text().map(|text| text.all()).unwrap_or_default();
+                    let meaningful = text.chars().any(char::is_alphanumeric)
+                        && text.chars().filter(|c| *c == '\u{fffd}').count() * 5
+                            < text.chars().count();
+                    let png = if force_ocr || !meaningful {
+                        Some(render_loaded_page(document, &target, page, 1600, false, false)?.png)
+                    } else {
+                        None
+                    };
+                    Ok(super::ExtractedPage { text, png })
+                })();
+                let _ = reply.send(result);
+            }
             Request::CopyGraphic {
                 id,
                 revision,
@@ -74,6 +125,12 @@ pub(super) fn run(library: PathBuf, font_directory: PathBuf, receiver: Receiver<
                     {
                         return Err(PreviewError::StaleObject);
                     }
+                    objects.sort_unstable();
+                    objects.dedup();
+                    let key = (revision, page, width, foreground, objects.clone());
+                    if let Some(png) = cache.layers.get(&key) {
+                        return Ok(png.clone());
+                    }
                     let candidate = pdfium
                         .load_pdf_from_byte_vec(
                             document
@@ -113,10 +170,11 @@ pub(super) fn run(library: PathBuf, font_directory: PathBuf, receiver: Receiver<
                             .remove_object_at_index(id)
                             .map_err(|_| PreviewError::RenderFailed)?;
                     }
-                    Ok(
+                    let png =
                         render_loaded_page(&candidate, &target, page, width, foreground, false)?
-                            .png,
-                    )
+                            .png;
+                    cache.layers.insert(key, png.clone());
+                    Ok(png)
                 })();
                 let _ = reply.send(result);
             }
@@ -164,7 +222,14 @@ pub(super) fn run(library: PathBuf, font_directory: PathBuf, receiver: Receiver<
                             .for_object(text);
                         extracted.trim_end()
                     };
+                    let key = (revision, text.font().token());
+                    if let Some(bytes) = cache.fonts.get(&key) {
+                        if crate::fonts::validate_original(bytes, needed).is_ok() {
+                            return Ok(bytes.clone());
+                        }
+                    }
                     let data = crate::fonts::preserved_bytes(document, &text.font(), needed)?;
+                    cache.fonts.insert(key, data.clone());
                     Ok(data)
                 })();
                 let _ = reply.send(result);
@@ -183,9 +248,16 @@ pub(super) fn run(library: PathBuf, font_directory: PathBuf, receiver: Receiver<
                         .as_mut()
                         .filter(|(active, _)| *active == id)
                         .ok_or(PreviewError::StaleObject)?;
-                    let state =
-                        history.apply(pdfium, document, revision, action, &font_directory)?;
+                    let state = history.apply(
+                        pdfium,
+                        document,
+                        revision,
+                        action,
+                        &font_directory,
+                        &ensemble,
+                    )?;
                     watermark_pages = history.watermark_pages();
+                    cache = Default::default();
                     Ok(state)
                 })();
                 let _ = reply.send(result);
@@ -227,26 +299,14 @@ pub(super) fn run(library: PathBuf, font_directory: PathBuf, receiver: Receiver<
                             return Err(PreviewError::TooLarge);
                         }
                         watermark_pages = crate::content_stream::watermarks::pages(&bytes);
-                        let document =
-                            pdfium
-                                .load_pdf_from_byte_vec(bytes, None)
-                                .map_err(|error| {
-                                    if matches!(
-                                        error,
-                                        PdfiumError::PdfiumLibraryInternalError(
-                                            PdfiumInternalError::PasswordError
-                                        )
-                                    ) {
-                                        PreviewError::PasswordRequired
-                                    } else {
-                                        PreviewError::InvalidDocument
-                                    }
-                                })?;
+                        let (document, was_recovered) = ensemble.open(pdfium, bytes)?;
+                        recovered = was_recovered;
                         if document.pages().is_empty() {
                             return Err(PreviewError::InvalidDocument);
                         }
                         current = Some((id, document));
                         history = History::default();
+                        cache = Default::default();
                     }
                     let mut rendered = {
                         if let Some(progress) = &progress {
@@ -258,6 +318,7 @@ pub(super) fn run(library: PathBuf, font_directory: PathBuf, receiver: Receiver<
                         progress(85);
                     }
                     rendered.state = history.state.clone();
+                    rendered.recovered = recovered;
                     if include_text {
                         rendered.text.watermark_pages = watermark_pages.clone();
                         if watermark_pages.contains(&page) {
@@ -273,7 +334,8 @@ pub(super) fn run(library: PathBuf, font_directory: PathBuf, receiver: Receiver<
             }
         }
         if current.is_some() {
-            documents.insert(session_id, (current, history, watermark_pages));
+            caches.insert(session_id.clone(), cache);
+            documents.insert(session_id, (current, history, watermark_pages, recovered));
         }
     }
 }

@@ -29,6 +29,9 @@ let nativeLogin: { id: string; redirectUrl: string } | null = null;
 let attempt = 0;
 let storageWrites = Promise.resolve();
 let exchangeController: AbortController | null = null;
+let authSubscription: { unsubscribe: () => void } | undefined;
+
+import.meta.hot?.dispose?.(() => authSubscription?.unsubscribe());
 
 function persistRefreshToken(token: string | null) {
   if (!isDesktop() || !authConfig) return Promise.resolve();
@@ -54,13 +57,20 @@ function persistRefreshToken(token: string | null) {
 export function initializeAuth() {
   return (initialization ??= (async () => {
     if (!supabase || !authConfig) return;
-    supabase.auth.onAuthStateChange((event, session) => {
+    const listener = supabase.auth.onAuthStateChange((event, session) => {
       useAuthStore.setState({ session });
       // Do not clear the OS credential when the in-memory SDK initially starts empty.
       if (event !== "INITIAL_SESSION") void persistRefreshToken(session?.refresh_token ?? null);
     });
+    authSubscription = listener.data.subscription;
     try {
       if (isDesktop()) {
+        const current = await supabase.auth.getSession();
+        if (current.error) throw current.error;
+        if (current.data.session) {
+          useAuthStore.setState({ session: current.data.session });
+          return;
+        }
         const refreshToken = await invoke<string | null>("read_auth_refresh_token", {
           project: authConfig.project,
         });
@@ -85,6 +95,7 @@ export function initializeAuth() {
         error: "저장된 로그인을 확인하지 못했습니다. 다시 로그인해 주세요.",
       });
     } finally {
+      if (useAuthStore.getState().session) void supabase.auth.startAutoRefresh();
       useAuthStore.setState({ ready: true });
     }
   })());

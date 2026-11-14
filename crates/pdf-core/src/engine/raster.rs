@@ -79,6 +79,8 @@ pub(super) fn render_loaded_page(
     let mut png = Vec::new();
     {
         let mut encoder = png::Encoder::new(&mut png, width, height);
+        // Interactive IPC previews favor low latency over maximum PNG compression.
+        encoder.set_compression(png::Compression::Fast);
         encoder.set_color(png::ColorType::Rgba);
         encoder.set_depth(png::BitDepth::Eight);
         let mut writer = encoder
@@ -89,6 +91,7 @@ pub(super) fn render_loaded_page(
             .map_err(|_| PreviewError::RenderFailed)?;
     }
     Ok(RenderedPage {
+        recovered: false,
         page_count,
         page_index: index,
         width,

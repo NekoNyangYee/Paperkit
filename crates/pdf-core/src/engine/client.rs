@@ -15,6 +15,25 @@ pub struct Paperframe {
 }
 
 impl Paperframe {
+    pub fn extract_text(
+        &self,
+        id: String,
+        revision: u64,
+        page: i32,
+        force_ocr: bool,
+    ) -> Result<super::ExtractedPage, PreviewError> {
+        let (reply, receiver) = mpsc::sync_channel(1);
+        self.sender
+            .send(Request::ExtractText {
+                id,
+                revision,
+                page,
+                force_ocr,
+                reply,
+            })
+            .map_err(|_| PreviewError::WorkerStopped)?;
+        receiver.recv().map_err(|_| PreviewError::WorkerStopped)?
+    }
     pub fn copy_graphic(
         &self,
         id: String,

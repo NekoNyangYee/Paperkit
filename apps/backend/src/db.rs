@@ -14,6 +14,8 @@ const APPLICATION_ID: i32 = 0x504b4954;
 const MIGRATIONS: &[&str] = &[
     include_str!("../migrations/001_core.sql"),
     include_str!("../migrations/002_ownership.sql"),
+    include_str!("../migrations/003_library.sql"),
+    include_str!("../migrations/004_signature_tools.sql"),
 ];
 pub const SCHEMA_VERSION: usize = MIGRATIONS.len();
 
@@ -200,14 +202,11 @@ fn document_row(row: &rusqlite::Row<'_>) -> rusqlite::Result<Document> {
         },
         created_at: row.get(6)?,
         last_opened_at: row.get(7)?,
+        favorite: row.get(8)?,
     })
 }
-const DOCUMENT_COLUMNS: &str = "id,source_path,display_name,size_bytes,source_modified_at,source_hash,created_at,last_opened_at";
-pub fn create_document(
-    conn: &mut Connection,
-    owner: &str,
-    input: DocumentInput,
-) -> Result<Document> {
+const DOCUMENT_COLUMNS: &str = "id,source_path,display_name,size_bytes,source_modified_at,source_hash,created_at,last_opened_at,favorite";
+pub fn validate_document_input(owner: &str, input: &DocumentInput) -> Result<()> {
     if !valid_id(owner) {
         return Err(Error::Invalid("Invalid owner"));
     }
@@ -223,15 +222,20 @@ pub fn create_document(
     {
         return Err(Error::Invalid("Invalid document metadata"));
     }
+    Ok(())
+}
+pub fn create_document(conn: &Connection, owner: &str, input: DocumentInput) -> Result<Document> {
+    validate_document_input(owner, &input)?;
     let document = Document {
         id: Uuid::new_v4().to_string(),
         input,
         created_at: now(),
         last_opened_at: now(),
+        favorite: false,
     };
     let d = &document;
     conn.execute(
-        "INSERT INTO documents VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
+        "INSERT INTO documents (id,source_path,display_name,size_bytes,source_modified_at,source_hash,created_at,last_opened_at,owner_id) VALUES (?1,?2,?3,?4,?5,?6,?7,?8,?9)",
         params![
             d.id,
             d.input.source_path,

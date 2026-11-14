@@ -4,10 +4,22 @@ import { spawnSync } from "node:child_process";
 const cargo = ["test", "-p", "pdf-core", "--locked"];
 const ignored = ["--", "--ignored", "--nocapture"];
 const cases = [
+  [
+    "cargo",
+    [
+      ...cargo,
+      "--test",
+      "fonts_smoke",
+      "replacement_dialog_embeds_one_face_for_many_source_fragments",
+      ...ignored,
+    ],
+  ],
   ["cargo", [...cargo, "--test", "pdfium_smoke", ...ignored]],
   [process.execPath, ["scripts/test-native.mjs", "corpus_smoke"]],
   ["cargo", [...cargo, "--test", "stamps_smoke", ...ignored]],
   ["cargo", [...cargo, "--test", "layout_smoke", ...ignored]],
+  ["cargo", [...cargo, "--test", "ensemble_smoke", ...ignored]],
+  ["cargo", [...cargo, "--lib", "qpdf_repairs_broken_xref", ...ignored]],
   [
     "cargo",
     [...cargo, "--lib", "recovers_embedded_cmap_and_edits_without_installed_original", ...ignored],

@@ -43,6 +43,8 @@ def check(path, expected, authorized=False):
 
 check("/healthz", 200)
 check("/v1/documents", 401)
+check("/v1/library/documents", 401)
+check("/v1/library/tools", 401)
 if key:
     check("/v1/me", 200, authorized=True)
     check("/v1/documents?limit=1", 200, authorized=True)

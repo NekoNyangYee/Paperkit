@@ -9,6 +9,7 @@ runs:
           .cache/pdfium-win-x64.tgz
           .cache/pdfium-7881
           .cache/fonts
+          .cache/ensemble-downloads
         key: native-windows-x64-v2-${{ hashFiles('scripts/*manifest.json') }}
     - name: Download and verify native resources
       shell: pwsh
@@ -16,3 +17,5 @@ runs:
         node scripts/setup-pdfium.mjs
         if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
         node scripts/setup-fonts.mjs
+        if ($LASTEXITCODE -ne 0) { exit $LASTEXITCODE }
+        node scripts/setup-ensemble.mjs --native-only

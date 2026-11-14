@@ -144,6 +144,7 @@ export interface FontInfo {
 }
 
 export interface PreviewPage {
+  recovered?: boolean;
   fileId: string;
   pageCount: number;
   pageIndex: number;

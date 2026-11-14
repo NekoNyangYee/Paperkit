@@ -1,11 +1,9 @@
-import {
-  useEffect,
-  useLayoutEffect,
-  useRef,
-  useState,
-  type ReactNode,
-  type RefObject,
-} from "react";
+import { useLayoutEffect, useRef, type ReactNode, type RefObject } from "react";
+
+export interface ZoomPoint {
+  x: number;
+  y: number;
+}
 
 // Animate document geometry and scrolling together; bitmap resolution is independent.
 export function ZoomSurface({
@@ -13,29 +11,50 @@ export function ZoomSurface({
   height,
   targetWidth,
   viewport,
+  zoomPoint,
   children,
 }: {
   width: number;
   height: number;
   targetWidth: number;
   viewport: RefObject<HTMLElement | null>;
+  zoomPoint?: RefObject<ZoomPoint | null>;
   children: ReactNode;
 }) {
-  const [displayWidth, setDisplayWidth] = useState(targetWidth);
+  const initialWidth = useRef(targetWidth);
   const currentWidth = useRef(targetWidth);
   const surface = useRef<HTMLDivElement>(null);
-  const anchor = useRef<{ x: number; y: number } | null>(null);
-  useEffect(() => {
+  const content = useRef<HTMLDivElement>(null);
+  const anchor = useRef<{ x: number; y: number; clientX: number; clientY: number } | null>(null);
+  useLayoutEffect(() => {
     const area = viewport.current;
     const node = surface.current;
-    if (!area || !node || targetWidth === currentWidth.current) return;
+    if (!area || !node || !content.current) return;
+    const paint = (value: number) => {
+      node.style.width = `${value}px`;
+      node.style.height = `${(height * value) / width}px`;
+      content.current!.style.transform = `scale(${value / width})`;
+      const fixed = anchor.current;
+      if (!fixed) return;
+      const box = node.getBoundingClientRect();
+      area.scrollLeft += box.left + box.width * fixed.x - fixed.clientX;
+      area.scrollTop += box.top + box.height * fixed.y - fixed.clientY;
+    };
+    if (targetWidth === currentWidth.current) {
+      paint(currentWidth.current);
+      return;
+    }
     const view = area.getBoundingClientRect();
     const box = node.getBoundingClientRect();
+    const clientX = zoomPoint?.current?.x ?? view.left + area.clientLeft + area.clientWidth / 2;
+    const clientY = zoomPoint?.current?.y ?? view.top + area.clientTop + area.clientHeight / 2;
     anchor.current =
       box.width > 0 && box.height > 0
         ? {
-            x: (view.left + area.clientWidth / 2 - box.left) / box.width,
-            y: (view.top + area.clientHeight / 2 - box.top) / box.height,
+            x: (clientX - box.left) / box.width,
+            y: (clientY - box.top) / box.height,
+            clientX,
+            clientY,
           }
         : null;
     const from = currentWidth.current;
@@ -46,30 +65,27 @@ export function ZoomSurface({
       start ??= time;
       const progress = duration === 0 ? 1 : Math.min(1, (time - start) / duration);
       currentWidth.current = from + (targetWidth - from) * (1 - Math.pow(1 - progress, 3));
-      setDisplayWidth(currentWidth.current);
+      // Update two DOM nodes, without rendering the text/object tree every frame.
+      paint(currentWidth.current);
       if (progress < 1) frame = requestAnimationFrame(tick);
     };
     frame = requestAnimationFrame(tick);
     return () => cancelAnimationFrame(frame);
-  }, [targetWidth, viewport]);
-  useLayoutEffect(() => {
-    const area = viewport.current;
-    const node = surface.current;
-    if (!area || !node || !anchor.current) return;
-    const view = area.getBoundingClientRect();
-    const box = node.getBoundingClientRect();
-    area.scrollLeft += box.left + box.width * anchor.current.x - view.left - area.clientWidth / 2;
-    area.scrollTop += box.top + box.height * anchor.current.y - view.top - area.clientHeight / 2;
-  }, [displayWidth, viewport]);
+  }, [targetWidth, viewport, zoomPoint, width, height]);
   return (
     <div
       ref={surface}
       className="mx-auto"
-      style={{ width: displayWidth, height: (height * displayWidth) / width }}
+      style={{ width: initialWidth.current, height: (height * initialWidth.current) / width }}
     >
       <div
+        ref={content}
         data-pdf-zoom-surface
-        style={{ width, transformOrigin: "top left", transform: `scale(${displayWidth / width})` }}
+        style={{
+          width,
+          transformOrigin: "top left",
+          transform: `scale(${initialWidth.current / width})`,
+        }}
       >
         {children}
       </div>

@@ -22,6 +22,8 @@ export function MessageDialog({
   onRetry?: () => void;
 }) {
   const [dismissed, setDismissed] = useState<string | null>(null);
+  const lastMessage = useRef(message);
+  if (message) lastMessage.current = message;
   const focus = useRef<HTMLElement | null>(null);
   useEffect(() => {
     if (!message) setDismissed(null);
@@ -49,7 +51,7 @@ export function MessageDialog({
         <Info className="mb-4 text-emerald-700" aria-hidden="true" />
         <AlertDialogTitle className="text-lg font-semibold">{title}</AlertDialogTitle>
         <AlertDialogDescription className="mt-3 whitespace-pre-wrap break-words text-sm leading-6 text-stone-600">
-          {message}
+          {message ?? lastMessage.current}
         </AlertDialogDescription>
         <div className="mt-6 flex justify-end gap-2">
           {onRetry && (

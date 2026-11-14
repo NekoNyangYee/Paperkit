@@ -21,7 +21,7 @@ export function PrivacyPolicy() {
           <header className="flex shrink-0 items-center justify-between gap-4 border-b border-stone-200 px-6 py-4">
             <div>
               <DialogTitle className="text-lg font-semibold">개인정보 처리방침</DialogTitle>
-              <DialogDescription className="mt-1 text-xs text-stone-500">
+              <DialogDescription className="sr-only">
                 Paperkit의 정보 처리와 사용자 선택을 안내합니다.
               </DialogDescription>
             </div>

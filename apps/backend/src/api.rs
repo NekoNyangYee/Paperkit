@@ -87,6 +87,23 @@ pub fn router(database: Database, config: &Config) -> Result<Router, reqwest::Er
     };
     let api = Router::new()
         .route("/me", get(me))
+        .route(
+            "/library/documents",
+            get(library_documents).post(remember_document),
+        )
+        .route("/documents/{id}/favorite", axum::routing::put(set_favorite))
+        .route(
+            "/library/tools",
+            get(library_tools)
+                .post(create_tool)
+                .layer(DefaultBodyLimit::max(1_500_000)),
+        )
+        .route(
+            "/library/tools/{id}",
+            axum::routing::delete(delete_tool)
+                .put(update_tool)
+                .layer(DefaultBodyLimit::max(1_500_000)),
+        )
         .route("/documents", get(list_documents).post(create_document))
         .route("/documents/{id}", get(get_document).delete(delete_document))
         .route("/workspaces/{id}", get(get_workspace).put(put_workspace))
@@ -172,6 +189,98 @@ async fn authorize(State(state): State<ApiState>, request: Request, next: Next) 
 
 async fn me(Extension(user): Extension<AuthenticatedUser>) -> Json<AuthenticatedUser> {
     Json(user)
+}
+
+async fn library_documents(
+    State(state): State<ApiState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Query(query): Query<LibraryQuery>,
+) -> Result<Json<Vec<Document>>, Error> {
+    Ok(Json(
+        state
+            .database
+            .run(move |c| crate::library::documents(c, &user.id, query))
+            .await?,
+    ))
+}
+async fn remember_document(
+    State(state): State<ApiState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(input): Json<DocumentInput>,
+) -> Result<Json<Document>, Error> {
+    Ok(Json(
+        state
+            .database
+            .run(move |c| crate::library::remember(c, &user.id, input))
+            .await?,
+    ))
+}
+async fn set_favorite(
+    State(state): State<ApiState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(value): Path<String>,
+    Json(input): Json<FavoriteInput>,
+) -> Result<Json<Document>, Error> {
+    let id = id(value)?;
+    Ok(Json(
+        state
+            .database
+            .run(move |c| crate::library::favorite(c, &user.id, &id, input.favorite))
+            .await?,
+    ))
+}
+async fn library_tools(
+    State(state): State<ApiState>,
+    Extension(user): Extension<AuthenticatedUser>,
+) -> Result<Json<Vec<LibraryTool>>, Error> {
+    Ok(Json(
+        state
+            .database
+            .run(move |c| crate::library::tools(c, &user.id))
+            .await?,
+    ))
+}
+async fn create_tool(
+    State(state): State<ApiState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Json(input): Json<ToolInput>,
+) -> Result<(StatusCode, Json<LibraryTool>), Error> {
+    Ok((
+        StatusCode::CREATED,
+        Json(
+            state
+                .database
+                .run(move |c| crate::library::create_tool(c, &user.id, input))
+                .await?,
+        ),
+    ))
+}
+async fn delete_tool(
+    State(state): State<ApiState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(value): Path<String>,
+) -> Result<StatusCode, Error> {
+    let id = id(value)?;
+    state
+        .database
+        .run(move |c| crate::library::delete_tool(c, &user.id, &id))
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn update_tool(
+    State(state): State<ApiState>,
+    Extension(user): Extension<AuthenticatedUser>,
+    Path(value): Path<String>,
+    Json(input): Json<ToolInput>,
+) -> Result<Json<LibraryTool>, Error> {
+    let id = id(value)?;
+    Ok(Json(
+        state
+            .database
+            .run(move |c| crate::library::update_tool(c, &user.id, &id, input))
+            .await?,
+    ))
 }
 
 fn id(value: String) -> db::Result<String> {

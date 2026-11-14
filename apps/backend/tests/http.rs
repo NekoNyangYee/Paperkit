@@ -21,6 +21,106 @@ impl Drop for Fixture {
 const USER_A: &str = "11111111-1111-4111-8111-111111111111";
 const USER_B: &str = "22222222-2222-4222-8222-222222222222";
 const SECOND_KEY: &str = "second-user-test-access-token";
+
+#[tokio::test]
+async fn saved_tools_update_in_place_validate_content_and_enforce_ownership() {
+    let (_fixture, app) = fixture(120).await;
+    let png = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1cAAAAASUVORK5CYII=";
+    for kind in ["text", "watermark", "image", "signature"] {
+        let content = if matches!(kind, "image" | "signature") {
+            png
+        } else {
+            "처음 문구"
+        };
+        let response = app
+            .clone()
+            .oneshot(request(
+                "POST",
+                "/v1/library/tools",
+                Some(json!({"name":"처음 이름","kind":kind,"content":content})),
+                true,
+            ))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::CREATED);
+        let saved = json(response).await;
+        let path = format!("/v1/library/tools/{}", saved["id"].as_str().unwrap());
+        let changed_content = if matches!(kind, "image" | "signature") {
+            png
+        } else {
+            "바꾼 문구"
+        };
+        let update = json!({"name":"바꾼 이름","kind":kind,"content":changed_content});
+        assert_eq!(
+            app.clone()
+                .oneshot(request("PUT", &path, Some(update.clone()), false))
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        let mut other = request("PUT", &path, Some(update.clone()), true);
+        other.headers_mut().insert(
+            "authorization",
+            format!("Bearer {SECOND_KEY}").parse().unwrap(),
+        );
+        assert_eq!(
+            app.clone().oneshot(other).await.unwrap().status(),
+            StatusCode::NOT_FOUND
+        );
+        let response = app
+            .clone()
+            .oneshot(request("PUT", &path, Some(update), true))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::OK);
+        let updated = json(response).await;
+        assert_eq!(updated["id"], saved["id"]);
+        assert_eq!(updated["createdAt"], saved["createdAt"]);
+        assert_eq!(updated["name"], "바꾼 이름");
+        assert_eq!(updated["content"], changed_content);
+        for invalid in [
+            json!({"name":" ","kind":kind,"content":changed_content}),
+            json!({"name":"이름","kind":kind,"content":""}),
+            json!({"name":"이름","kind":"different","content":changed_content}),
+            json!({"name":"이름","kind":if kind == "text" {"watermark"} else {"text"},"content":"다른 종류"}),
+        ] {
+            assert_eq!(
+                app.clone()
+                    .oneshot(request("PUT", &path, Some(invalid), true))
+                    .await
+                    .unwrap()
+                    .status(),
+                StatusCode::BAD_REQUEST
+            );
+        }
+        let listed = json(
+            app.clone()
+                .oneshot(request("GET", "/v1/library/tools", None, true))
+                .await
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(
+            listed
+                .as_array()
+                .unwrap()
+                .iter()
+                .filter(|item| item["id"] == saved["id"])
+                .count(),
+            1
+        );
+        assert_eq!(
+            listed
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|item| item["id"] == saved["id"])
+                .unwrap(),
+            &updated
+        );
+    }
+}
 async fn fixture(limit: u32) -> (Fixture, Router) {
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let origin = format!("http://{}", listener.local_addr().unwrap());
@@ -72,6 +172,176 @@ fn request(method: &str, path: &str, body: Option<Value>, auth: bool) -> Request
 }
 async fn json(response: axum::response::Response) -> Value {
     serde_json::from_slice(&to_bytes(response.into_body(), 1024 * 1024).await.unwrap()).unwrap()
+}
+
+#[tokio::test]
+async fn library_remembers_documents_without_duplicates_and_scopes_search_and_favorites() {
+    let (_fixture, app) = fixture(120).await;
+    let input =
+        json!({"sourcePath":"C:\\문서\\견적서.pdf","displayName":"견적서.pdf","sizeBytes":100});
+    let first = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/library/documents",
+            Some(input.clone()),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(first.status(), StatusCode::OK);
+    let id = json(first).await["id"].as_str().unwrap().to_owned();
+    let second = app
+        .clone()
+        .oneshot(request("POST", "/v1/library/documents", Some(input), true))
+        .await
+        .unwrap();
+    assert_eq!(json(second).await["id"], id);
+    let favorite_path = format!("/v1/documents/{id}/favorite");
+    let response = app
+        .clone()
+        .oneshot(request(
+            "PUT",
+            &favorite_path,
+            Some(json!({"favorite":true})),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(json(response).await["favorite"], true);
+    let response = app
+        .clone()
+        .oneshot(request(
+            "GET",
+            "/v1/library/documents?favorites=true&q=%EA%B2%AC%EC%A0%81",
+            None,
+            true,
+        ))
+        .await
+        .unwrap();
+    let documents = json(response).await;
+    assert_eq!(documents.as_array().unwrap().len(), 1);
+    assert_eq!(documents[0]["id"], id);
+    let mut other = request("PUT", &favorite_path, Some(json!({"favorite":false})), true);
+    other.headers_mut().insert(
+        "authorization",
+        format!("Bearer {SECOND_KEY}").parse().unwrap(),
+    );
+    assert_eq!(
+        app.clone().oneshot(other).await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
+    let mut other = request("GET", "/v1/library/documents", None, true);
+    other.headers_mut().insert(
+        "authorization",
+        format!("Bearer {SECOND_KEY}").parse().unwrap(),
+    );
+    assert_eq!(json(app.oneshot(other).await.unwrap()).await, json!([]));
+}
+
+#[tokio::test]
+async fn toolbox_round_trips_large_images_and_prevents_cross_account_access() {
+    use base64::{engine::general_purpose::STANDARD, Engine};
+    let (_fixture, app) = fixture(120).await;
+    let mut png = STANDARD.decode("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1cAAAAASUVORK5CYII=").unwrap();
+    png.resize(280_000, 0);
+    let input = json!({"name":"로고","kind":"image","content":format!("data:image/png;base64,{}", STANDARD.encode(png))});
+    let response = app
+        .clone()
+        .oneshot(request(
+            "POST",
+            "/v1/library/tools",
+            Some(input.clone()),
+            true,
+        ))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let saved = json(response).await;
+    assert_eq!(saved["content"], input["content"]);
+    let path = format!("/v1/library/tools/{}", saved["id"].as_str().unwrap());
+    let mut other = request("DELETE", &path, None, true);
+    other.headers_mut().insert(
+        "authorization",
+        format!("Bearer {SECOND_KEY}").parse().unwrap(),
+    );
+    assert_eq!(
+        app.clone().oneshot(other).await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
+    let mut other = request("GET", "/v1/library/tools", None, true);
+    other.headers_mut().insert(
+        "authorization",
+        format!("Bearer {SECOND_KEY}").parse().unwrap(),
+    );
+    assert_eq!(
+        json(app.clone().oneshot(other).await.unwrap()).await,
+        json!([])
+    );
+    for input in [
+        json!({"name":" ","kind":"text","content":"내용"}),
+        json!({"name":"문구","kind":"text","content":"a".repeat(4001)}),
+        json!({"name":"이미지","kind":"image","content":"data:image/png;base64,AAAA"}),
+        json!({"name":"서명","kind":"signature","content":"일반 텍스트"}),
+    ] {
+        let response = app
+            .clone()
+            .oneshot(request("POST", "/v1/library/tools", Some(input), true))
+            .await
+            .unwrap();
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    assert_eq!(
+        app.clone()
+            .oneshot(request("DELETE", &path, None, true))
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        json(
+            app.oneshot(request("GET", "/v1/library/tools", None, true))
+                .await
+                .unwrap()
+        )
+        .await,
+        json!([])
+    );
+}
+
+#[tokio::test]
+async fn signature_tools_round_trip_as_png_and_remain_account_scoped() {
+    let (_fixture, app) = fixture(120).await;
+    let content = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+aL1cAAAAASUVORK5CYII=";
+    let input = json!({"name":"내 서명","kind":"signature","content":content});
+    let response = app
+        .clone()
+        .oneshot(request("POST", "/v1/library/tools", Some(input), true))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::CREATED);
+    let saved = json(response).await;
+    assert_eq!(saved["kind"], "signature");
+    assert_eq!(saved["content"], content);
+    let listed = json(
+        app.clone()
+            .oneshot(request("GET", "/v1/library/tools", None, true))
+            .await
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(listed, json!([saved.clone()]));
+    let path = format!("/v1/library/tools/{}", saved["id"].as_str().unwrap());
+    let mut other = request("DELETE", &path, None, true);
+    other.headers_mut().insert(
+        "authorization",
+        format!("Bearer {SECOND_KEY}").parse().unwrap(),
+    );
+    assert_eq!(
+        app.oneshot(other).await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
 }
 
 #[tokio::test]

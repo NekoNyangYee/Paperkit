@@ -252,6 +252,28 @@ fn replace_with_bounds(
     } else {
         None
     };
+    if font.is_none() && before.font_change_blocked.is_none() {
+        if let Some(bytes) =
+            crate::content_stream::text_patch::patch(original, index, &original_objects, id, value)
+        {
+            // Prefer changing source glyph codes over regenerating all neighbouring
+            // objects. The exact same content, geometry and pixel checks still apply.
+            if let Ok(verified) = verify_replacement(
+                pdfium,
+                original,
+                bytes,
+                index,
+                id,
+                value,
+                &before,
+                &before.font,
+                false,
+                cell,
+            ) {
+                return Ok(verified);
+            }
+        }
+    }
     let token = if let Some((directory, font)) = font {
         if before.font_change_blocked.is_some() {
             return Err(PreviewError::UnsupportedText);
@@ -372,6 +394,35 @@ fn replace_with_bounds(
         &std::collections::BTreeSet::from([id]),
         1,
     )?;
+    verify_replacement(
+        pdfium,
+        original,
+        bytes,
+        index,
+        id,
+        value,
+        &before,
+        &expected_font,
+        font_replaced,
+        cell,
+    )
+}
+
+fn verify_replacement(
+    pdfium: &Pdfium,
+    original: &[u8],
+    bytes: Vec<u8>,
+    index: i32,
+    id: usize,
+    value: &str,
+    before: &text::TextObject,
+    expected_font: &str,
+    font_replaced: bool,
+    cell: Option<[f32; 4]>,
+) -> Result<Vec<u8>, PreviewError> {
+    let config = PdfRenderConfig::new()
+        .set_target_width(800)
+        .set_maximum_height(2200);
     let reopened = pdfium
         .load_pdf_from_byte_vec(bytes.clone(), None)
         .map_err(|_| PreviewError::VerificationFailed)?;

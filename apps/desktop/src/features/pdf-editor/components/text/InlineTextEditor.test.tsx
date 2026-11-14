@@ -5,7 +5,10 @@ const font = vi.hoisted(() => vi.fn(async (_name, context) => `Font${context.obj
 vi.mock("@/features/pdf-editor/lib/fonts/editor-font", () => ({ editorFont: font }));
 import { InlineTextEditor } from "./InlineTextEditor";
 import type { TextObject, TextSelection } from "@/shared/pdf/types";
-afterEach(cleanup);
+afterEach(() => {
+  cleanup();
+  vi.restoreAllMocks();
+});
 it("preserves input entered immediately on mount before passive effects run", async () => {
   const selected: TextObject = {
     id: 0,
@@ -114,88 +117,103 @@ it("applies the current DOM with Enter, leaves Shift+Enter for line breaks, and 
   fireEvent.keyDown(input, { key: "Enter", repeat: true });
   expect(apply).toHaveBeenCalledTimes(1);
 });
-it("remembers PDF line boundaries and hanging indent without changing draft spaces", async () => {
-  const first: TextObject = {
-    id: 10,
-    text: "First",
-    font: "Original",
-    fontSize: 12,
-    color: [0, 0, 0, 255],
-    matrix: [1, 0, 0, 1, 20, 100],
-    bounds: [
-      [20, 100],
-      [50, 100],
-      [50, 112],
-      [20, 112],
-    ],
-    screenBounds: [
-      [0, 0],
-      [30, 0],
-      [30, 12],
-      [0, 12],
-    ],
-    editBlocked: null,
-    fontChangeBlocked: null,
-  };
-  const next: TextObject = {
-    ...first,
-    id: 11,
-    text: "Second",
-    matrix: [1, 0, 0, 1, 10, 82],
-    bounds: [
-      [10, 82],
-      [50, 82],
-      [50, 94],
-      [10, 94],
-    ],
-  };
-  const selected: TextSelection = {
-    ...first,
-    text: "First Second",
-    group: {
-      id: 0,
-      kind: "paragraph",
-      text: "First Second",
-      uncertain: false,
-      editBlocked: null,
-      runs: [
-        { object: 10, start: 0, end: 5, objectStart: 0 },
-        { object: 11, start: 6, end: 12, objectStart: 0 },
+it.each([0.25, 0.5, 2])(
+  "preserves local PDF line positions at page zoom %s without changing draft spaces",
+  async (zoom) => {
+    vi.spyOn(HTMLElement.prototype, "getBoundingClientRect").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      const offset = (this as HTMLElement).dataset.sourceFont === "11" ? -10 : 0;
+      return { left: 50 + offset * zoom, top: 0, width: 100 * zoom, height: 40 * zoom } as DOMRect;
+    });
+    vi.spyOn(HTMLElement.prototype, "offsetLeft", "get").mockImplementation(function (
+      this: HTMLElement,
+    ) {
+      return (this as HTMLElement).dataset.sourceFont === "11" ? -10 : 0;
+    });
+    const first: TextObject = {
+      id: 10,
+      text: "First",
+      font: "Original",
+      fontSize: 12,
+      color: [0, 0, 0, 255],
+      matrix: [1, 0, 0, 1, 20, 100],
+      bounds: [
+        [20, 100],
+        [50, 100],
+        [50, 112],
+        [20, 112],
       ],
-      bounds: [first.bounds, next.bounds],
-      screenBounds: [first.screenBounds, next.screenBounds],
-    },
-  };
-  const onDraft = vi.fn();
-  render(
-    <InlineTextEditor
-      selected={selected}
-      objects={[first, next]}
-      draft={selected.text}
-      scale={1}
-      disabled={false}
-      point={null}
-      onDraft={onDraft}
-      onApply={vi.fn()}
-      onComposition={vi.fn()}
-      fontContext={{ fileId: "lines", revision: 0, pageIndex: 0 }}
-      visible
-      onFontsReady={vi.fn()}
-      onFontError={vi.fn()}
-    />,
-  );
-  const input = screen.getByRole("textbox");
-  await waitFor(() => expect(input.querySelectorAll("span")[1].style.fontFamily).toBe("Font11"));
-  expect(input.querySelector("br")?.dataset.pdfSeparator).toBe(" ");
-  expect(input.querySelectorAll("span")[1].style.marginLeft).toBe("-10px");
-  expect(input.style.lineHeight).toBe("18px");
-  input.querySelectorAll("span")[1].textContent = "Edited";
-  fireEvent.input(input);
-  expect(onDraft).toHaveBeenLastCalledWith("First Edited");
-  expect(input.querySelectorAll("span")[1].style.marginLeft).toBe("-10px");
-  expect(input.querySelectorAll("span")[1].dataset.pdfX).toBeUndefined();
-  expect(input.querySelectorAll("span")[1].style.letterSpacing).toBe("normal");
-});
+      screenBounds: [
+        [0, 0],
+        [30, 0],
+        [30, 12],
+        [0, 12],
+      ],
+      editBlocked: null,
+      fontChangeBlocked: null,
+    };
+    const next: TextObject = {
+      ...first,
+      id: 11,
+      text: "Second",
+      matrix: [1, 0, 0, 1, 10, 82],
+      bounds: [
+        [10, 82],
+        [50, 82],
+        [50, 94],
+        [10, 94],
+      ],
+    };
+    const selected: TextSelection = {
+      ...first,
+      text: "First Second",
+      group: {
+        id: 0,
+        kind: "paragraph",
+        text: "First Second",
+        uncertain: false,
+        editBlocked: null,
+        runs: [
+          { object: 10, start: 0, end: 5, objectStart: 0 },
+          { object: 11, start: 6, end: 12, objectStart: 0 },
+        ],
+        bounds: [first.bounds, next.bounds],
+        screenBounds: [first.screenBounds, next.screenBounds],
+      },
+    };
+    const onDraft = vi.fn();
+    render(
+      <InlineTextEditor
+        selected={selected}
+        objects={[first, next]}
+        draft={selected.text}
+        scale={1}
+        disabled={false}
+        point={null}
+        onDraft={onDraft}
+        onApply={vi.fn()}
+        onComposition={vi.fn()}
+        fontContext={{ fileId: "lines", revision: 0, pageIndex: 0 }}
+        visible
+        onFontsReady={vi.fn()}
+        onFontError={vi.fn()}
+      />,
+    );
+    const input = screen.getByRole("textbox");
+    await waitFor(() => expect(input.querySelectorAll("span")[1].style.fontFamily).toBe("Font11"));
+    expect(input.style.whiteSpace).toBe("pre");
+    expect(input.querySelector("br")?.dataset.pdfSeparator).toBe(" ");
+    expect(input.querySelectorAll("span")[1].style.marginLeft).toBe("-10px");
+    expect(input.style.lineHeight).toBe("18px");
+    input.querySelectorAll("span")[1].textContent = "Edited";
+    fireEvent.input(input);
+    expect(onDraft).toHaveBeenLastCalledWith("First Edited");
+    expect(input.querySelectorAll("span")[1].style.marginLeft).toBe("-10px");
+    expect(input.querySelectorAll("span")[1].dataset.pdfX).toBeUndefined();
+    expect(input.querySelectorAll("span")[1].style.letterSpacing).toBe("normal");
+  },
+);
 it("keeps distinct same-name fonts and prevents collapsed heading line height", async () => {
   const object: TextObject = {
     id: 1,

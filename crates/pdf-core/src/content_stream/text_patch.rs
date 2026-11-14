@@ -1,4 +1,4 @@
-//! Small, same-length edits using the original PDF encoding and text operators.
+//! Source-encoded edits that preserve all other drawing and text instructions.
 //! Unsupported or ambiguous mappings fall back to the regular reflow path.
 use crate::text::TextObject;
 use lopdf::{content::Content, Dictionary, Document, Object, Stream};
@@ -12,24 +12,18 @@ pub(crate) fn patch(
 ) -> Option<Vec<u8>> {
     let mut doc = Document::load_mem(original).ok()?;
     let page = *doc.get_pages().get(&(index as u32 + 1))?;
-    // Nested Forms require an explicit ownership mapping before editing.
-    if doc.objects.values().any(|o| {
-        o.as_stream()
-            .ok()
-            .is_some_and(|s| s.dict.get(b"Subtype").and_then(Object::as_name).ok() == Some(b"Form"))
-    }) {
-        return None;
-    }
     let fonts = doc.get_page_fonts(page).ok()?;
     let bytes = doc
         .get_page_content_with_limit(page, 64 * 1024 * 1024)
         .ok()?;
     let mut content = Content::decode_strict(&bytes).ok()?;
+    let spans = super::spans::operations(&bytes, &content.operations).ok()?;
     let mut font = Vec::new();
     let mut stack = Vec::new();
     let mut ordinal = 0;
     let mut changed = false;
-    for op in &mut content.operations {
+    let mut replacement = None;
+    for (operation_index, op) in content.operations.iter_mut().enumerate() {
         match op.operator.as_str() {
             "q" => stack.push(font.clone()),
             "Q" => font = stack.pop()?,
@@ -70,12 +64,19 @@ pub(crate) fn patch(
         if source.id != target {
             continue;
         }
-        if changed || value.chars().count() != source.text.chars().count() {
+        let same_length = value.chars().count() == source.text.chars().count();
+        // A single source string can grow without redistributing TJ kerning across
+        // string fragments. The caller verifies advance, bounds and other objects.
+        if changed || (!same_length && parts.len() != 1) {
             return None;
         }
         let mut chars = value.chars();
         for (part, old) in parts.into_iter().zip(decoded) {
-            let next: String = chars.by_ref().take(old.chars().count()).collect();
+            let next: String = if same_length {
+                chars.by_ref().take(old.chars().count()).collect()
+            } else {
+                value.to_owned()
+            };
             if next == old {
                 continue;
             }
@@ -93,14 +94,25 @@ pub(crate) fn patch(
             };
             *bytes = encoded;
         }
+        let operation = lopdf::content::Content {
+            operations: vec![op.clone()],
+        }
+        .encode()
+        .ok()?;
         changed = true;
+        replacement = Some((spans[operation_index].clone(), operation));
     }
     if !changed || ordinal != objects.len() || !stack.is_empty() {
         return None;
     }
     drop(fonts);
+    let (range, operation) = replacement?;
+    let mut output = bytes[..range.start].to_vec();
+    output.push(b'\n');
+    output.extend_from_slice(&operation);
+    output.extend_from_slice(&bytes[range.end..]);
     // New private Contents leaves shared streams, font resources and other pages intact.
-    let stream = doc.add_object(Stream::new(Dictionary::new(), content.encode().ok()?));
+    let stream = doc.add_object(Stream::new(Dictionary::new(), output));
     doc.get_object_mut(page)
         .ok()?
         .as_dict_mut()

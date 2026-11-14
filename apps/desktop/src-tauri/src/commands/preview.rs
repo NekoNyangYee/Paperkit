@@ -9,6 +9,7 @@ pub struct PreviewState(pub Paperframe, pub std::path::PathBuf);
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewPage {
+    recovered: bool,
     file_id: String,
     page_count: i32,
     page_index: i32,
@@ -17,6 +18,49 @@ pub struct PreviewPage {
     image_url: String,
     text: pdf_core::text::PageText,
     state: pdf_core::edit::EditState,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct PageTextSource {
+    text: String,
+    image_url: Option<String>,
+}
+
+#[tauri::command]
+pub async fn extract_page_text(
+    file_id: String,
+    revision: u64,
+    page_index: i32,
+    force_ocr: Option<bool>,
+    state: State<'_, AppState>,
+    preview: State<'_, PreviewState>,
+) -> Result<PageTextSource, String> {
+    if !state
+        .1
+        .lock()
+        .map_err(|_| "파일 상태를 확인하지 못했어요.")?
+        .contains_key(&file_id)
+    {
+        return Err("문서를 다시 선택해 주세요.".into());
+    }
+    let engine = preview.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        let result = engine
+            .extract_text(file_id, revision, page_index, force_ocr.unwrap_or(false))
+            .map_err(message)?;
+        Ok(PageTextSource {
+            text: result.text,
+            image_url: result.png.map(|bytes| {
+                format!(
+                    "data:image/png;base64,{}",
+                    base64::engine::general_purpose::STANDARD.encode(bytes)
+                )
+            }),
+        })
+    })
+    .await
+    .map_err(|_| "페이지 글자를 읽지 못했어요. 다시 시도해 주세요.".to_owned())?
 }
 
 fn message(error: PreviewError) -> String {
@@ -241,6 +285,7 @@ pub async fn render_selected_page(
     }
     let page = rendered.map_err(message)?;
     Ok(PreviewPage {
+        recovered: page.recovered,
         text: page.text,
         state: page.state,
         file_id,

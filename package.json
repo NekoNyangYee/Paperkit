@@ -1,6 +1,6 @@
 {
   "name": "paperkit",
-  "version": "0.7.1",
+  "version": "0.8.0",
   "private": true,
   "packageManager": "pnpm@10.28.1",
   "engines": {
@@ -15,7 +15,9 @@
     "setup:fonts": "node scripts/setup-fonts.mjs",
     "test:fonts": "node scripts/test-native.mjs fonts_smoke",
     "test:stamps": "cargo test -p pdf-core --locked --test stamps_smoke -- --ignored",
+    "test:ensemble": "node scripts/test-ensemble.mjs",
     "setup:pdfium": "node scripts/setup-pdfium.mjs",
+    "setup:engines": "node scripts/setup-ensemble.mjs",
     "test:pdfium": "cargo test -p pdf-core --test pdfium_smoke -- --ignored",
     "test:web": "pnpm --filter @paperkit/desktop test",
     "test:web:unit": "pnpm --filter @paperkit/desktop test:unit",
@@ -24,6 +26,7 @@
     "test:rust:integration": "node scripts/test-rust-integration.mjs",
     "dev": "pnpm --filter @paperkit/desktop tauri dev",
     "dev:web": "pnpm --filter @paperkit/desktop dev",
+    "dev:backend": "node scripts/dev-backend.mjs",
     "build": "pnpm --filter @paperkit/desktop tauri build",
     "build:web": "pnpm --filter @paperkit/desktop build",
     "typecheck": "pnpm --filter @paperkit/desktop typecheck",

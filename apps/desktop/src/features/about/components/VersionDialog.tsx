@@ -6,6 +6,7 @@ import { isTauri } from "@tauri-apps/api/core";
 import { Download, Info, RefreshCw, X } from "lucide-react";
 import appIcon from "../../../../app-icon.svg";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/shared/ui/dialog";
+import { userErrorMessage } from "@/shared/lib/errors";
 import { IconButton } from "@/shared/ui/icon-button";
 import { compareVersions, latestRelease } from "@/features/about/lib/releases";
 import Markdown from "react-markdown";
@@ -58,7 +59,6 @@ export function VersionDialog({
     const timeout = setTimeout(() => controller.abort(), 10000);
     setLoading(true);
     setError(null);
-    setRelease(null);
     try {
       if (isTauri()) setVersion(await getVersion());
       if (controller.signal.aborted) return;
@@ -66,14 +66,7 @@ export function VersionDialog({
       if (pending.current !== controller) return;
       setRelease(result);
     } catch (cause) {
-      if (pending.current === controller)
-        setError(
-          controller.signal.aborted
-            ? "응답 시간이 초과되었습니다. 네트워크를 확인해 주세요."
-            : cause instanceof Error
-              ? cause.message
-              : "릴리즈를 불러오지 못했습니다.",
-        );
+      if (pending.current === controller) setError(userErrorMessage(cause, "update"));
     } finally {
       clearTimeout(timeout);
       if (pending.current === controller) setLoading(false);
@@ -239,7 +232,7 @@ export function VersionDialog({
                     setOpen(true);
                     setReadyTag(null);
                     setUpdatePhase("idle");
-                    setError(cause instanceof Error ? cause.message : String(cause));
+                    setError(userErrorMessage(cause, "update"));
                   } finally {
                     updating.current = false;
                   }
@@ -254,15 +247,9 @@ export function VersionDialog({
                       ? "재시작하여 업데이트"
                       : "업데이트"}
               </Button>
-              <p className="mt-2 text-xs text-stone-500">
-                {!release.downloadUrl
-                  ? "업데이트 설치 파일이 아직 준비되지 않았습니다."
-                  : updatePhase === "downloading"
-                    ? "앱에서 업데이트를 내려받고 검증하고 있습니다."
-                    : readyTag === release.tag
-                      ? "다운로드가 완료되었습니다. 재시작하면 새 버전을 설치하고 앱을 다시 엽니다."
-                      : "앱에서 다운로드합니다. 완료 후 재시작할 시점을 선택할 수 있습니다."}
-              </p>
+              {!release.downloadUrl && (
+                <p className="mt-2 text-xs text-stone-500">설치 파일 준비 중</p>
+              )}
             </div>
           )}
           {release && (

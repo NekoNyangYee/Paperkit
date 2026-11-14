@@ -87,18 +87,21 @@ export function InlineTextEditor({
       : [selected];
     void (async () => {
       const fonts: Array<readonly [string, string]> = [];
-      for (const source of [...new Map(sources.map((o) => [o.id, o])).values()]) {
-        if (disposed) break;
+      const requests = new Map<string, Promise<string>>();
+      for (const source of sources) {
         const replacement = selected.editFonts?.[source.id];
-        fonts.push([
-          String(source.id),
-          await (replacement
-            ? replacementEditorFont(replacement)
-            : editorFont(source.font, {
-                ...fontContext,
-                objectId: source.fontObjectId ?? source.id,
-              })),
-        ]);
+        const key = replacement ?? `original:${source.fontObjectId ?? source.id}`;
+        if (!requests.has(key))
+          requests.set(
+            key,
+            replacement
+              ? replacementEditorFont(replacement)
+              : editorFont(source.font, {
+                  ...fontContext,
+                  objectId: source.fontObjectId ?? source.id,
+                }),
+          );
+        fonts.push([String(source.id), await requests.get(key)!]);
       }
       return fonts;
     })()
@@ -133,17 +136,16 @@ export function InlineTextEditor({
         });
         const element = input.current;
         if (!touched.current && element && element.getBoundingClientRect().width > 0) {
-          const origin = element.getBoundingClientRect().left;
-          const stretch = Math.abs(selected.matrix[0] / selected.matrix[3]) || 1;
           // Read layout once before writing margins, rather than forcing layout for every object.
           const positions = Array.from(
             element.querySelectorAll<HTMLElement>("[data-pdf-x]"),
             (span) => {
-              const rect = span.getBoundingClientRect();
               return {
                 span,
-                left: (rect.left - origin) / stretch,
-                top: rect.top,
+                // offsetLeft/Top are in the editor's local CSS coordinates.
+                // Client rectangles include the outer page zoom transform.
+                left: span.offsetLeft,
+                top: span.offsetTop,
                 margin: parseFloat(span.style.marginLeft) || 0,
               };
             },
@@ -165,7 +167,7 @@ export function InlineTextEditor({
       .catch(() => {
         if (!disposed) {
           const message =
-            "원본 글꼴을 불러오지 못했습니다. 동일 글꼴을 설치하거나 글꼴 메뉴에서 대체 글꼴을 선택해 주세요.";
+            "글꼴을 불러오지 못했어요. 원본 글꼴을 불러오거나 다른 글꼴을 선택해 주세요.";
           setError(message);
           onFontError(message);
         }
@@ -419,7 +421,10 @@ export function InlineTextEditor({
           fontSynthesis: "none",
           fontKerning: "none",
           fontVariantLigatures: "none",
-          whiteSpace: "pre-wrap",
+          // PDF rows are already laid out. Letting the browser wrap them before
+          // applying their original x offsets creates extra rows and huge gaps.
+          // Release those offsets and use normal wrapping on the first edit.
+          whiteSpace: touched.current ? "pre-wrap" : "pre",
           overflowWrap: "anywhere",
           color: `rgba(${selected.color.slice(0, 3).join(",")},${selected.color[3] / 255})`,
           caretColor: "#047857",

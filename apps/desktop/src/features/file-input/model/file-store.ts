@@ -234,7 +234,7 @@ export const useFileStore = create<AppStore>((set, get) => {
         }
         set({ ready: true, phase: get().error ? "error" : get().file ? "selected" : "idle" });
       } catch (cause) {
-        set({ phase: "error", error: errorMessage(cause) });
+        set({ phase: "error", error: errorMessage(cause, "startup") });
       }
     },
     receive: (paths) => run("check", paths),

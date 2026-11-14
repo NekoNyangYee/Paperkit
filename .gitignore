@@ -6,6 +6,8 @@ target/
 apps/desktop/src-tauri/gen/
 apps/desktop/src-tauri/resources/pdfium/
 apps/desktop/src-tauri/resources/fonts/
+apps/desktop/src-tauri/resources/qpdf/
+apps/desktop/public/ocr/
 *.local
 .DS_Store
 Thumbs.db

@@ -26,8 +26,11 @@ export function groupSelection(group: TextGroup, objects: TextObject[]): TextSel
     bounds: cover(group.bounds),
     screenBounds: cover(group.screenBounds),
     editBlocked: group.editBlocked,
-    fontChangeBlocked: group.canChangeFont
-      ? null
-      : "이 블록은 서식이나 경계가 복잡합니다. 객체 선택에서 글꼴을 변경해 주세요.",
+    // Flow-capable paragraphs use the font/reflow planner, whose eligibility is
+    // broader than the older fixed-size group replacement path.
+    fontChangeBlocked:
+      group.canChangeFont || group.canFlow
+        ? null
+        : "이 블록은 서식이나 경계가 복잡합니다. 객체 선택에서 글꼴을 변경해 주세요.",
   };
 }

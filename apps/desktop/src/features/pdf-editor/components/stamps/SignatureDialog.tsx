@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import SignaturePad from "signature_pad";
 import { X, RotateCcw } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/shared/ui/dialog";
+import { userErrorMessage } from "@/shared/lib/errors";
 import { IconButton } from "@/shared/ui/icon-button";
 import { Button } from "@/shared/ui/button";
 import { useConfirmDialog } from "@/shared/ui/confirm-dialog";
@@ -12,10 +13,12 @@ export function SignatureDialog({
   onClose,
   onApply,
   applyError,
+  purpose = "insert",
 }: {
   onClose: () => void;
   onApply: (png: number[]) => Promise<boolean>;
   applyError?: string | null;
+  purpose?: "insert" | "tool";
 }) {
   const { open, close } = useDialogClose(onClose);
   const resetDialog = useConfirmDialog({
@@ -85,9 +88,10 @@ export function SignatureDialog({
           <DialogTitle className="text-lg font-semibold">전자서명</DialogTitle>
           <IconButton icon={X} label="전자서명 창 닫기" disabled={pending} onClick={close} />
         </div>
-        <DialogDescription className="shrink-0 text-sm text-stone-500">
-          아래에 서명해 주세요. 생성하면 현재 페이지에 들어가며, 이동하거나 크기를 조절할 수
-          있습니다.
+        <DialogDescription className="sr-only">
+          {purpose === "tool"
+            ? "그린 서명을 선택한 뒤 도구함에 보관할 수 있습니다."
+            : "아래에 서명해 주세요. 생성하면 현재 페이지에 들어가며, 이동하거나 크기를 조절할 수 있습니다."}
         </DialogDescription>
         <div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-stone-300 bg-white">
           <div className="pointer-events-none absolute inset-x-6 bottom-12 border-b border-dashed border-stone-200" />
@@ -100,8 +104,7 @@ export function SignatureDialog({
             style={{ pointerEvents: pending ? "none" : undefined }}
           />
         </div>
-        <div className="flex shrink-0 items-center justify-between text-xs text-stone-500">
-          <span>마우스·터치·펜으로 그릴 수 있습니다.</span>
+        <div className="flex shrink-0 justify-end text-xs text-stone-500">
           <Button
             variant="ghost"
             size="sm"
@@ -135,16 +138,27 @@ export function SignatureDialog({
               setError(null);
               try {
                 if (await onApply(signaturePng(canvas).png)) close();
-                else setError("서명을 넣지 못했습니다. 다시 시도해 주세요.");
+                else
+                  setError(
+                    purpose === "tool"
+                      ? "서명을 준비하지 못했습니다. 다시 시도해 주세요."
+                      : "서명을 넣지 못했습니다. 다시 시도해 주세요.",
+                  );
               } catch (cause) {
-                setError(cause instanceof Error ? cause.message : "서명을 생성하지 못했습니다.");
+                setError(userErrorMessage(cause, "signature"));
               } finally {
                 applying.current = false;
                 setPending(false);
               }
             }}
           >
-            {pending ? "서명 넣는 중…" : "서명 생성"}
+            {pending
+              ? purpose === "tool"
+                ? "처리 중…"
+                : "서명 넣는 중…"
+              : purpose === "tool"
+                ? "서명 선택"
+                : "서명 생성"}
           </Button>
         </div>
       </DialogContent>

@@ -72,11 +72,9 @@ export function FileInput() {
         if (disposed) stop();
         else unlisten = stop;
       })
-      .catch((cause: unknown) => {
+      .catch(() => {
         if (!disposed)
-          setListenerError(
-            `드래그 앤 드롭을 연결하지 못했습니다. 파일 선택 버튼을 이용해 주세요. (${String(cause)})`,
-          );
+          setListenerError("끌어 놓기를 지금 사용할 수 없어요. 파일 선택 버튼으로 열어 주세요.");
       });
     return () => {
       disposed = true;
@@ -91,26 +89,21 @@ export function FileInput() {
       aria-busy={busy}
       onDragOver={(event) => event.preventDefault()}
       onDrop={(event) => event.preventDefault()}
-      className={`w-full max-w-2xl rounded-3xl border-2 border-dashed px-6 py-14 text-center transition-colors sm:px-12 sm:py-16 ${dragging ? "border-emerald-700 bg-emerald-50" : "border-stone-300 bg-white/80"}`}
+      className={`w-full rounded-xl border border-dashed px-6 py-8 text-center transition-colors sm:px-10 sm:py-10 ${dragging ? "border-emerald-700 bg-emerald-50" : "border-stone-300 bg-white/60"}`}
     >
       <div
-        className={`mx-auto grid size-20 place-items-center rounded-2xl ${dragging ? "bg-emerald-100" : "bg-stone-100"}`}
+        className={`mx-auto grid size-12 place-items-center rounded-lg ${dragging ? "bg-emerald-100" : "bg-stone-100"}`}
         aria-hidden="true"
       >
         {file && !dragging ? (
-          <FileText size={36} className="text-emerald-900" />
+          <FileText size={25} strokeWidth={1.5} className="text-emerald-900" />
         ) : (
-          <Upload size={36} className="text-emerald-900" />
+          <Upload size={25} strokeWidth={1.5} className="text-emerald-900" />
         )}
       </div>
-      <h1 id="workspace-title" className="mt-7 text-2xl font-semibold tracking-tight">
+      <h1 id="workspace-title" className="mt-5 text-xl font-semibold tracking-tight">
         {dragging ? "여기에 놓아주세요" : file ? "이 파일을 열까요?" : "PDF 파일을 끌어다 놓으세요"}
       </h1>
-      <p className="mt-3 text-sm leading-6 text-stone-500">
-        {file
-          ? "선택한 파일을 확인한 뒤 PDF를 열어주세요."
-          : "또는 아래 버튼을 눌러 파일을 선택하세요."}
-      </p>
       {file && (
         <div
           className="mt-7 rounded-2xl bg-stone-100/80 px-5 py-5 text-left"

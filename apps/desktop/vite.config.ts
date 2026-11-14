@@ -13,6 +13,12 @@ export default defineConfig({
     port: 1420,
     strictPort: true,
     watch: { ignored: ["**/src-tauri/**"] },
+    proxy: {
+      "/api": {
+        target: "http://127.0.0.1:18081",
+        rewrite: (path) => path.replace(/^\/api/, ""),
+      },
+    },
   },
   build: { target: "es2022" },
 });

@@ -36,6 +36,53 @@ beforeEach(() => {
   vi.mocked(watermarkPng).mockResolvedValue(image);
 });
 
+it("retries a failed background without closing the dialog or losing watermark input", async () => {
+  vi.mocked(invoke)
+    .mockRejectedValueOnce(new Error("private renderer trace"))
+    .mockResolvedValueOnce("data:image/png;base64,Q0xFQU4=");
+  const onApply = vi.fn();
+  render(
+    <WatermarkDialog
+      page={{ ...page, text: { ...page.text, watermarkObjects: [9] } }}
+      initialText="검토용"
+      onApply={onApply}
+      onClose={vi.fn()}
+    />,
+  );
+  const input = screen.getByLabelText("워터마크 텍스트") as HTMLTextAreaElement;
+  fireEvent.change(input, { target: { value: "작성 중인 문구" } });
+  const alert = await screen.findByRole("alert");
+  expect(alert.textContent).not.toContain("private");
+  fireEvent.click(screen.getByRole("button", { name: "미리보기 다시 불러오기" }));
+  await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
+  expect(input.value).toBe("작성 중인 문구");
+  expect(onApply).not.toHaveBeenCalled();
+});
+
+it("opens a saved toolbox phrase as an enabled watermark without applying it automatically", async () => {
+  const onApply = vi.fn();
+  render(
+    <WatermarkDialog
+      page={page}
+      initialText="외부 배포 금지"
+      onApply={onApply}
+      onClose={vi.fn()}
+    />,
+  );
+  expect((screen.getByLabelText("워터마크 텍스트") as HTMLTextAreaElement).value).toBe(
+    "외부 배포 금지",
+  );
+  expect(screen.getByRole("switch", { name: "워터마크 사용" }).getAttribute("aria-checked")).toBe(
+    "true",
+  );
+  await waitFor(() =>
+    expect(watermarkSource).toHaveBeenCalledWith(
+      expect.objectContaining({ text: "외부 배포 금지" }),
+    ),
+  );
+  expect(onApply).not.toHaveBeenCalled();
+});
+
 it("restores the applied text settings and switch after closing and reopening", async () => {
   const onApply = vi.fn().mockResolvedValue(true);
   const view = render(<WatermarkDialog page={page} onApply={onApply} onClose={vi.fn()} />);

@@ -30,6 +30,130 @@ fn pdf(stream: &str, rotation: i32) -> Vec<u8> {
 
 #[test]
 #[ignore = "requires bundled Windows PDFium"]
+fn variable_length_object_edit_preserves_untouched_stream_bytes_and_typography() {
+    let resources =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/resources");
+    let engine = PreviewEngine::start(resources.join("pdfium/pdfium.dll")).unwrap();
+    let directory = tempfile::tempdir().unwrap();
+    let path = directory.path().join("source.pdf");
+    let untouched = "q % retain source precision\n0.750000001 0 0 0.750000001 15.00000001 20 cm BT /F1 16 Tf 1.25 Tc 1 0 0 1 50 400 Tm (KEEP THIS) Tj ET Q\n";
+    let original = pdf(
+        &format!("BT /F1 12 Tf 50 700 Td (ChangeMe) Tj ET\n{untouched}"),
+        0,
+    );
+    fs::write(&path, &original).unwrap();
+    let before = engine
+        .render("source".into(), path.clone(), 0, 800)
+        .unwrap();
+    let target = before
+        .text
+        .objects
+        .iter()
+        .find(|o| o.text.trim() == "ChangeMe")
+        .unwrap();
+    let keep = before
+        .text
+        .objects
+        .iter()
+        .find(|o| o.text.trim() == "KEEP THIS")
+        .unwrap();
+    engine
+        .edit(
+            "source".into(),
+            0,
+            EditAction::Replace {
+                page: 0,
+                object: target.id,
+                text: "Changed Message".into(),
+            },
+        )
+        .unwrap();
+    let after = engine
+        .render("source".into(), path.clone(), 0, 800)
+        .unwrap();
+    let retained = after
+        .text
+        .objects
+        .iter()
+        .find(|o| o.text.trim() == "KEEP THIS")
+        .unwrap();
+    assert_eq!(keep.bounds, retained.bounds);
+    assert_eq!(keep.matrix, retained.matrix);
+    assert!(after
+        .text
+        .objects
+        .iter()
+        .any(|o| o.text.trim() == "Changed Message"));
+    let saved = directory.path().join("edited.pdf");
+    engine
+        .edit(
+            "source".into(),
+            1,
+            EditAction::Save {
+                path: saved.clone(),
+            },
+        )
+        .unwrap();
+    let document = lopdf::Document::load(&saved).unwrap();
+    let page = document.get_pages()[&1];
+    let content = document
+        .get_page_content_with_limit(page, 64 * 1024 * 1024)
+        .unwrap();
+    assert!(content
+        .windows(untouched.len())
+        .any(|w| w == untouched.as_bytes()));
+    let paragraph = before
+        .text
+        .groups
+        .iter()
+        .find(|g| g.can_flow && g.text.trim() == "ChangeMe")
+        .unwrap();
+    engine
+        .render("flow-source".into(), path.clone(), 0, 800)
+        .unwrap();
+    engine
+        .edit(
+            "flow-source".into(),
+            0,
+            EditAction::FlowBlock {
+                page: 0,
+                group: paragraph.id,
+                text: "Change".into(),
+                width: None,
+                height: None,
+            },
+        )
+        .unwrap();
+    let flow_saved = directory.path().join("flow-edited.pdf");
+    engine
+        .edit(
+            "flow-source".into(),
+            1,
+            EditAction::Save {
+                path: flow_saved.clone(),
+            },
+        )
+        .unwrap();
+    let flow_doc = lopdf::Document::load(flow_saved).unwrap();
+    let content = flow_doc
+        .get_page_content_with_limit(flow_doc.get_pages()[&1], 64 * 1024 * 1024)
+        .unwrap();
+    assert!(content
+        .windows(untouched.len())
+        .any(|w| w == untouched.as_bytes()));
+    engine.edit("source".into(), 1, EditAction::Undo).unwrap();
+    assert_eq!(
+        engine
+            .render("source".into(), path.clone(), 0, 800)
+            .unwrap()
+            .png,
+        before.png
+    );
+    assert_eq!(fs::read(path).unwrap(), original);
+}
+
+#[test]
+#[ignore = "requires bundled Windows PDFium"]
 fn automatic_width_grows_multiline_text_until_the_page_edge() {
     let resources =
         PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/resources");

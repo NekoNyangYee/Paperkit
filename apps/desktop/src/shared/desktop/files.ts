@@ -1,4 +1,5 @@
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { userErrorMessage, type ErrorContext } from "@/shared/lib/errors";
 
 export interface FileInfo {
   id: string;
@@ -11,17 +12,8 @@ export function isDesktop(): boolean {
   return isTauri();
 }
 
-export function errorMessage(cause: unknown): string {
-  if (
-    typeof cause === "object" &&
-    cause !== null &&
-    "message" in cause &&
-    typeof cause.message === "string"
-  )
-    return cause.message;
-  return typeof cause === "string"
-    ? cause
-    : "파일 확인 중 오류가 발생했습니다. 다시 시도해 주세요.";
+export function errorMessage(cause: unknown, context: ErrorContext = "file"): string {
+  return userErrorMessage(cause, context);
 }
 
 function parseFile(result: unknown): FileInfo {

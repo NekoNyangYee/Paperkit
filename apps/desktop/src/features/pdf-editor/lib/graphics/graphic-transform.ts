@@ -13,7 +13,10 @@ export function graphicBox(points: number[][]): Box {
 }
 export function graphicTransform(object: GraphicObject, next: Box): number[] | null {
   const old = graphicBox(object.screenBounds);
-  if (old.width <= 0 || old.height <= 0) return null;
+  if (old.width <= 0 || old.height <= 0) {
+    const delta = pdfDelta(object, next.left - old.left, next.top - old.top);
+    return delta ? [1, 0, 0, 1, delta[0], delta[1]] : null;
+  }
   const points = [0, 1, 3].map((i) => {
     const [x, y] = object.screenBounds[i];
     const delta = pdfDelta(

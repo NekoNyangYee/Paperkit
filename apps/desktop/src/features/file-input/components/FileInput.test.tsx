@@ -280,7 +280,7 @@ describe("file input UI → Zustand → IPC adapter (native IPC mocked)", () => 
     );
     await mount();
     drag("drop", ["a.pdf", "b.pdf"]);
-    expect((await screen.findByRole("alert")).textContent).toContain("PDF 한 개만");
+    expect((await screen.findByRole("alert")).textContent).toContain("한 개씩 선택");
     expect(screen.getByText(original.name)).toBeTruthy();
   });
 
@@ -307,7 +307,7 @@ describe("file input UI → Zustand → IPC adapter (native IPC mocked)", () => 
   it("rejects malformed IPC metadata and can retry initialization", async () => {
     mocks.invoke.mockResolvedValueOnce({ revision: 1, file: { name: "broken" }, error: null });
     render(<FileInput />);
-    expect((await screen.findByRole("alert")).textContent).toContain("응답이 올바르지");
+    expect((await screen.findByRole("alert")).textContent).toContain("다시 연결");
     fireEvent.click(screen.getByRole("button", { name: "다시 연결" }));
     await waitFor(() => expect(useFileStore.getState().ready).toBe(true));
   });

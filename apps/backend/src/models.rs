@@ -19,6 +19,38 @@ pub struct Document {
     pub input: DocumentInput,
     pub created_at: i64,
     pub last_opened_at: i64,
+    pub favorite: bool,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct LibraryQuery {
+    pub q: Option<String>,
+    pub favorites: Option<bool>,
+    pub offset: Option<u32>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FavoriteInput {
+    pub favorite: bool,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ToolInput {
+    pub name: String,
+    pub kind: String,
+    pub content: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+pub struct LibraryTool {
+    pub id: String,
+    #[serde(flatten)]
+    pub input: ToolInput,
+    pub created_at: i64,
 }
 
 #[derive(Debug, Deserialize, Serialize)]

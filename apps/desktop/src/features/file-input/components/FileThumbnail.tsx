@@ -33,7 +33,7 @@ export function FileThumbnail({ fileId }: { fileId: string }) {
         if (active) setImage({ url: page.imageUrl, width: page.width, height: page.height });
       })
       .catch((cause) => {
-        if (active) setError(errorMessage(cause));
+        if (active) setError(errorMessage(cause, "preview"));
       });
     return () => {
       active = false;
@@ -105,7 +105,7 @@ export function FileThumbnail({ fileId }: { fileId: string }) {
           </span>
         )}
       </div>
-      <MessageDialog title="미리보기 오류" message={error} onRetry={() => setRetry((n) => n + 1)} />
+      <MessageDialog title="미리보기 안내" message={error} onRetry={() => setRetry((n) => n + 1)} />
     </div>
   );
 }

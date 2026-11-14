@@ -615,6 +615,13 @@ fn watermark_and_signature_preserve_transparency_rotation_history_and_saved_edit
         fs::write(&duplicate_path, &duplicate).unwrap();
         for (id, action) in [
             (
+                "image",
+                EditAction::PasteImage {
+                    page: 0,
+                    png: transparent_png(),
+                },
+            ),
+            (
                 "signature",
                 EditAction::AddSignature {
                     page: 0,
@@ -673,6 +680,33 @@ fn watermark_and_signature_preserve_transparency_rotation_history_and_saved_edit
                 stamped.png
             );
             engine.release("verify-stamp".into()).unwrap();
+            if id != "watermark" {
+                let target = stamped.text.graphics.last().unwrap();
+                engine
+                    .edit(
+                        id.into(),
+                        1,
+                        EditAction::TransformGraphic {
+                            page: 0,
+                            object: target.id,
+                            matrix: [1., 0., 0., 1., 8., -8.],
+                        },
+                    )
+                    .unwrap_or_else(|error| panic!("{name} {id} move: {error:?}"));
+                let moved = engine
+                    .render(id.into(), duplicate_path.clone(), 0, 800)
+                    .unwrap();
+                assert_ne!(moved.png, stamped.png);
+                engine.edit(id.into(), 2, EditAction::Undo).unwrap();
+                assert_eq!(
+                    engine
+                        .render(id.into(), duplicate_path.clone(), 0, 800)
+                        .unwrap()
+                        .png,
+                    stamped.png
+                );
+                // Undo the original insertion using the current revision below.
+            }
             let undo_revision = if id == "watermark" {
                 engine
                     .edit(id.into(), 1, EditAction::RemoveWatermark { page: None })
@@ -694,7 +728,7 @@ fn watermark_and_signature_preserve_transparency_rotation_history_and_saved_edit
                 );
                 3
             } else {
-                1
+                3
             };
             engine
                 .edit(id.into(), undo_revision, EditAction::Undo)

@@ -1,5 +1,5 @@
 import { Button } from "@/shared/ui/button";
-import { useEffect, useRef, useState } from "react";
+import { memo, useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
 import { groupSelection } from "@/shared/pdf/selection";
 import type { PreviewPage, TextSelection, SelectionMode, EditAction } from "@/shared/pdf/types";
@@ -10,6 +10,7 @@ import Moveable, { type Requester } from "react-moveable";
 import { Move, Trash2, Combine, X } from "lucide-react";
 import { IconButton } from "@/shared/ui/icon-button";
 import { MessageDialog } from "@/shared/ui/MessageDialog";
+import { userErrorMessage } from "@/shared/lib/errors";
 import { GraphicLayer } from "@/features/pdf-editor/components/graphics/GraphicLayer";
 
 async function decodedLayer(data: string) {
@@ -23,7 +24,7 @@ async function decodedLayer(data: string) {
   return data;
 }
 
-export function TextPage({
+export const TextPage = memo(function TextPage({
   active = true,
   fontGeneration = 0,
   page,
@@ -70,6 +71,10 @@ export function TextPage({
   const lastClick = useRef<{ id: number; x: number; y: number; time: number } | null>(null);
   const clickText = (object: TextSelection, event: React.MouseEvent) => {
     event.stopPropagation();
+    if (suppressClick.current) {
+      suppressClick.current = false;
+      return;
+    }
     if (disabled) return;
     point.current = { x: event.clientX, y: event.clientY };
     const previous = lastClick.current;
@@ -143,6 +148,49 @@ export function TextPage({
     snapped.current = { x: 0, y: 0 };
     setOffset({ x: 0, y: 0 });
   };
+  const nearBorder = (event: React.PointerEvent<SVGPolygonElement>, bounds: number[][]) => {
+    const svg = event.currentTarget.ownerSVGElement!;
+    const box = svg.getBoundingClientRect();
+    const ratio = box.width / page.width || 1;
+    const x = (event.clientX - box.left) / ratio,
+      y = (event.clientY - box.top) / ratio;
+    return bounds.some((p, i) => {
+      const q = bounds[(i + 1) % bounds.length];
+      const dx = q[0] - p[0],
+        dy = q[1] - p[1];
+      const t = Math.max(
+        0,
+        Math.min(1, ((x - p[0]) * dx + (y - p[1]) * dy) / (dx * dx + dy * dy || 1)),
+      );
+      return Math.hypot(x - p[0] - t * dx, y - p[1] - t * dy) <= 5 / ratio;
+    });
+  };
+  const finishBorderDrag = (event: React.PointerEvent<SVGPolygonElement>) => {
+    const d = iconDrag.current;
+    iconDrag.current = null;
+    if (!d) return;
+    const distance = Math.hypot(event.clientX - d.x, event.clientY - d.y);
+    if (distance < 3) {
+      resetMove();
+      return;
+    }
+    suppressClick.current = true;
+    movePreview(event.clientX - d.x, event.clientY - d.y);
+    const ratio =
+      event.currentTarget.ownerSVGElement!.getBoundingClientRect().width / page.width || 1;
+    const source = d.target.group
+      ? page.text.objects.find((o) => o.id === d.target.group!.runs[0].object)
+      : d.target;
+    const delta =
+      source && pdfDelta(source, (event.clientX - d.x) / ratio, (event.clientY - d.y) / ratio);
+    requester.current?.requestEnd();
+    requester.current = null;
+    if (delta)
+      void Promise.resolve(onMove(...delta, d.target)).then((ok) => {
+        if (ok === false) resetMove();
+      }, resetMove);
+    else resetMove();
+  };
   useEffect(() => {
     resetMove();
   }, [selected?.id, page]);
@@ -188,19 +236,17 @@ export function TextPage({
   const following = selected?.group?.canFlow ? (selected.group.followingObjects ?? []) : [];
   const flowKey = `${selectionKey}:${page.width}:${prepareAttempt}`;
   const flowing = inlineEditing && following.length > 0;
-  const flowReady = !flowing || flowLayers?.key === flowKey;
   const ready =
     typeof FontFace === "undefined" ||
     (preparedSelection === selectionKey &&
       fontsReady === fontReadyKey &&
-      flowReady &&
       (!completeSelection || background !== null));
   useEffect(() => {
     setGrowth(0);
   }, [selectionKey, inlineEditing]);
   useEffect(() => {
     let active = true;
-    if (!flowing || flowLayers?.key === flowKey) return;
+    if (!flowing || growth <= 1 || flowLayers?.key === flowKey) return;
     const selectedIds = selected?.group?.runs.map((r) => r.object) ?? [];
     const args = {
       fileId: page.fileId,
@@ -226,13 +272,13 @@ export function TextPage({
         );
         if (active) setFlowLayers({ key: flowKey, background, foreground });
       } catch (error) {
-        if (active) setBackgroundError(`문단 배치 미리보기 준비 실패: ${String(error)}`);
+        if (active) setBackgroundError(userErrorMessage(error, "preview"));
       }
     })();
     return () => {
       active = false;
     };
-  }, [flowing, flowKey]);
+  }, [flowing, flowKey, growth > 1]);
   useEffect(() => {
     setBackground(null);
     setForeground(null);
@@ -261,24 +307,16 @@ export function TextPage({
     // Keep the prepared layer when a selection enters editing. Serial requests
     // also avoid filling the PDF worker queue with both layers at once.
     void (async () => {
-      let stage = "편집 배경";
       try {
         const data = await decodedLayer(await invoke<string>("editing_background", args));
         if (!active) return;
         setBackground(data);
-        stage = "이동 미리보기";
         const foregroundData = await decodedLayer(
           await invoke<string>("editing_background", { ...args, foreground: true }),
         );
         if (active) setForeground(foregroundData);
       } catch (error) {
-        const detail =
-          error instanceof Error
-            ? error.message
-            : typeof error === "string"
-              ? error
-              : "알 수 없는 오류입니다.";
-        if (active) setBackgroundError(`${stage} 준비 실패: ${detail}`);
+        if (active) setBackgroundError(userErrorMessage(error, "preview"));
       }
     })();
     return () => {
@@ -567,6 +605,43 @@ export function TextPage({
                   hoverTimer.current = setTimeout(() => setHovered(null), 180);
                 }}
                 onClick={(event) => clickText(object, event)}
+                onPointerDown={(event) => {
+                  if (
+                    disabled ||
+                    inlineEditing ||
+                    event.button !== 0 ||
+                    (object.fontChangeBlocked !== null && !object.group?.canFlow) ||
+                    !nearBorder(event, bounds)
+                  )
+                    return;
+                  event.stopPropagation();
+                  event.preventDefault();
+                  event.currentTarget.setPointerCapture(event.pointerId);
+                  iconDrag.current = { x: event.clientX, y: event.clientY, target: object };
+                  onSelect(object);
+                }}
+                onPointerMove={(event) => {
+                  event.currentTarget.style.cursor =
+                    !disabled && nearBorder(event, bounds) ? "move" : "text";
+                  if (iconDrag.current?.target.id === object.id) {
+                    event.stopPropagation();
+                    movePreview(
+                      event.clientX - iconDrag.current.x,
+                      event.clientY - iconDrag.current.y,
+                    );
+                  }
+                }}
+                onPointerUp={finishBorderDrag}
+                onPointerCancel={() => {
+                  iconDrag.current = null;
+                  resetMove();
+                }}
+                onLostPointerCapture={() => {
+                  if (iconDrag.current) {
+                    iconDrag.current = null;
+                    resetMove();
+                  }
+                }}
                 onDoubleClick={(event) => {
                   event.stopPropagation();
                   point.current = { x: event.clientX, y: event.clientY };
@@ -773,7 +848,7 @@ export function TextPage({
         </div>
       )}
       <MessageDialog
-        title="편집 화면 준비 오류"
+        title="편집 화면 안내"
         message={active ? backgroundError : null}
         onRetry={() => setPrepareAttempt((value) => value + 1)}
       />
@@ -965,4 +1040,4 @@ export function TextPage({
         ))}
     </div>
   );
-}
+});

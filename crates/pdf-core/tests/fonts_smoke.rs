@@ -11,6 +11,116 @@ fn sample() -> Vec<u8> {
 }
 
 #[test]
+#[ignore = "requires bundled PDFium and fonts"]
+fn replacement_dialog_embeds_one_face_for_many_source_fragments() {
+    let resources =
+        PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../apps/desktop/src-tauri/resources");
+    let engine = PreviewEngine::start_with_fonts(
+        resources.join("pdfium/pdfium.dll"),
+        resources.join("fonts"),
+    )
+    .unwrap();
+    let directory =
+        std::env::temp_dir().join(format!("paperkit-font-fragments-{}", std::process::id()));
+    fs::create_dir_all(&directory).unwrap();
+    let stream: String = (0..32)
+        .map(|i| {
+            format!(
+                "BT /F1 8 Tf 1 0 0 1 {} {} Tm (aaaa) Tj ET\n",
+                20 + (i % 8) * 28,
+                250 - (i / 8) * 14
+            )
+        })
+        .collect();
+    let original = sample_font_stream("Courier", &stream);
+    let path = directory.join("source.pdf");
+    fs::write(&path, &original).unwrap();
+    let before = engine
+        .render("fragments".into(), path.clone(), 0, 800)
+        .unwrap();
+    let group = before
+        .text
+        .groups
+        .iter()
+        .find(|g| g.can_flow && g.runs.len() >= 24)
+        .unwrap();
+    let state = engine
+        .edit(
+            "fragments".into(),
+            0,
+            EditAction::FlexibleEdit {
+                page: 0,
+                groups: vec![group.id],
+                object: None,
+                text: group.text.clone(),
+                fonts: group
+                    .runs
+                    .iter()
+                    .map(|r| (r.object, "pretendard".into()))
+                    .collect(),
+                width: None,
+                height: None,
+            },
+        )
+        .unwrap();
+    let edited = engine
+        .render("fragments".into(), path.clone(), 0, 800)
+        .unwrap();
+    assert!(edited
+        .text
+        .objects
+        .iter()
+        .all(|o| o.font.starts_with("Pretendard")));
+    let output = directory.join("saved.pdf");
+    engine
+        .edit(
+            "fragments".into(),
+            state.revision,
+            EditAction::Save {
+                path: output.clone(),
+            },
+        )
+        .unwrap();
+    let saved = fs::read(&output).unwrap();
+    assert!(
+        saved.len() < 8 * 1024 * 1024,
+        "one shared font must fit well below the history cap"
+    );
+    let doc = lopdf::Document::load_mem(&saved).unwrap();
+    let font_files: std::collections::BTreeSet<_> = doc
+        .objects
+        .values()
+        .filter_map(|o| {
+            o.as_dict()
+                .ok()?
+                .get(b"FontFile2")
+                .ok()?
+                .as_reference()
+                .ok()
+        })
+        .collect();
+    assert_eq!(font_files.len(), 1);
+    assert_eq!(
+        engine
+            .render("reopen-fragments".into(), output, 0, 800)
+            .unwrap()
+            .png,
+        edited.png
+    );
+    engine
+        .edit("fragments".into(), state.revision, EditAction::Undo)
+        .unwrap();
+    assert_eq!(
+        engine
+            .render("fragments".into(), path.clone(), 0, 800)
+            .unwrap()
+            .png,
+        before.png
+    );
+    assert_eq!(fs::read(path).unwrap(), original);
+}
+
+#[test]
 #[ignore = "requires bundled fonts"]
 fn maps_family_localized_and_pdf_style_aliases_without_changing_weight() {
     let resources = PathBuf::from(env!("CARGO_MANIFEST_DIR"))

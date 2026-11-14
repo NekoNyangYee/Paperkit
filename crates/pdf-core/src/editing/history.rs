@@ -78,6 +78,7 @@ impl History {
         revision: u64,
         action: EditAction,
         font_directory: &Path,
+        ensemble: &crate::engine::ensemble::Ensemble,
     ) -> Result<EditState, PreviewError> {
         if revision != self.state.revision {
             return Err(PreviewError::StaleObject);
@@ -101,6 +102,7 @@ impl History {
         }
         match action {
             EditAction::Save { path } => {
+                ensemble.validate(self.bytes.as_ref().unwrap())?;
                 crate::document::save::save_new(
                     pdfium,
                     document,
@@ -144,6 +146,7 @@ impl History {
                 let candidate = pdfium
                     .load_pdf_from_byte_vec(bytes.clone(), None)
                     .map_err(|_| PreviewError::EditFailed)?;
+                ensemble.validate(&bytes)?;
                 self.undo.push(self.bytes.replace(bytes).unwrap());
                 self.redo.clear();
                 // Bound snapshot memory and retain the most recent undo steps.

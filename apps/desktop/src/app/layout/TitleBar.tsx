@@ -44,7 +44,7 @@ export function TitleBar() {
       await getCurrentWindow()[action]();
       if (action === "toggleMaximize") setMaximized(await getCurrentWindow().isMaximized());
     } catch {
-      setError("창 제어에 실패했습니다. 다시 시도해 주세요.");
+      setError("창을 조절하지 못했어요. 잠시 후 다시 눌러 주세요.");
     }
   }
   return (

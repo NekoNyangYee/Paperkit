@@ -37,7 +37,7 @@ export function LoginRequiredDialog({
           <DialogTitle className="text-base font-semibold text-stone-900">
             로그인이 필요합니다
           </DialogTitle>
-          <DialogDescription className="text-sm leading-6 text-stone-500">
+          <DialogDescription className="sr-only">
             {feature} 기능은 로그인 후 이용할 수 있습니다.
           </DialogDescription>
         </div>

@@ -41,6 +41,7 @@ pub fn run() {
             files::synchronize_selection,
             files::clear_selection,
             preview::render_selected_page,
+            preview::extract_page_text,
             preview::edit_document,
             preview::list_fonts,
             preview::editor_font,

@@ -6,6 +6,13 @@ use crate::{
 };
 use std::{path::PathBuf, sync::mpsc::SyncSender};
 pub(super) enum Request {
+    ExtractText {
+        id: String,
+        revision: u64,
+        page: i32,
+        force_ocr: bool,
+        reply: SyncSender<Result<super::ExtractedPage, PreviewError>>,
+    },
     CopyGraphic {
         id: String,
         revision: u64,

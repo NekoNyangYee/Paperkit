@@ -1,5 +1,6 @@
 //! Editable blocks with retained source styles and independently adjustable width.
 pub(crate) mod followers;
+mod font_plan;
 pub(crate) mod lines;
 
 use crate::{
@@ -45,34 +46,6 @@ fn rect(points: &[[f32; 2]]) -> [f32; 4] {
             .map(|p| p[1])
             .fold(f32::NEG_INFINITY, f32::max),
     ]
-}
-
-fn original_encoding_roundtrips(
-    document: &mut PdfDocument<'_>,
-    token: PdfFontToken,
-    text: &str,
-) -> Result<bool, PreviewError> {
-    let chars: BTreeSet<char> = text.chars().collect();
-    let anchor = chars
-        .iter()
-        .copied()
-        .find(|c| !c.is_whitespace())
-        .unwrap_or(' ');
-    let probe = format!("{anchor}{}{anchor}", chars.into_iter().collect::<String>());
-    let object = PdfPageTextObject::new(document, &probe, token, PdfPoints::new(10.0))
-        .map_err(|_| PreviewError::FontUnavailable)?;
-    let mut page = document
-        .pages_mut()
-        .create_page_at_end(PdfPagePaperSize::a4())
-        .map_err(|_| PreviewError::EditFailed)?;
-    let object = page
-        .objects_mut()
-        .add_text_object(object)
-        .map_err(|_| PreviewError::EditFailed)?;
-    let matches = object.as_text_object().is_some_and(|o| o.text() == probe);
-    drop(object);
-    page.delete().map_err(|_| PreviewError::EditFailed)?;
-    Ok(matches)
 }
 
 pub(crate) fn replace(
@@ -186,7 +159,7 @@ pub(crate) fn replace_with_fonts(
         && overrides.is_empty()
         && alignment.is_none()
     {
-        if let Some(bytes) = patch_short_edit(
+        if let Some(bytes) = patch_source_edit(
             pdfium,
             original,
             index,
@@ -291,124 +264,18 @@ pub(crate) fn replace_with_fonts(
             }
         })
         .collect();
-    let mut tokens = Vec::new();
-    let mut expected_styles = sources.clone();
-    let mut originals = Vec::new();
-    let mut original_faces = HashMap::new();
-    for source in &sources {
-        let object = page
-            .objects()
-            .get(source.id)
-            .map_err(|_| PreviewError::StaleObject)?;
-        let font = object
-            .as_text_object()
-            .ok_or(PreviewError::UnsupportedText)?
-            .font();
-        let token = font.token();
-        let original = original_faces.entry(token).or_insert_with(|| {
-            let embedded = font.is_embedded().unwrap_or(false);
-            let bytes = if embedded && replacement_font.is_none() {
-                font.data().ok().map(std::sync::Arc::new)
-            } else {
-                None
-            };
-            (token, embedded, bytes)
-        });
-        originals.push(original.clone());
-    }
-    let mut needed_by_style = vec![String::new(); sources.len()];
-    let mut needed_by_font: HashMap<PdfFontToken, String> = HashMap::new();
-    for (&ch, &style) in new.iter().zip(&styles).filter(|(ch, _)| **ch != '\n') {
-        needed_by_style[style].push(ch);
-        if !overrides.contains_key(&sources[style].id) {
-            needed_by_font
-                .entry(originals[style].0)
-                .or_default()
-                .push(ch);
-        }
-    }
     drop(page);
-    let replacement = replacement_font
-        .map(|name| {
-            let bytes = crate::fonts::load(fonts, name, &value.replace('\n', ""))?;
-            doc.fonts_mut()
-                .load_true_type_from_bytes(&bytes, true)
-                .map_err(|_| PreviewError::FontUnavailable)
-        })
-        .transpose()?;
-    let mut recovered_tokens = HashMap::new();
-    for (i, source) in sources.iter().enumerate() {
-        let needed = &needed_by_style[i];
-        let (token, embedded, bytes) = &originals[i];
-        // Removed runs need no font, glyph mapping, or probe object.
-        if needed.is_empty() {
-            tokens.push(*token);
-            continue;
-        }
-        let face_needed = needed_by_font.get(token).map_or("", String::as_str);
-        let usable = if recovered_tokens.contains_key(token) {
-            false
-        } else if *embedded {
-            bytes
-                .as_ref()
-                .is_some_and(|b| crate::fonts::validate_original(b, &face_needed).is_ok())
-        } else {
-            crate::text::standard_font(&source.font) && needed.is_ascii()
-        };
-        if let Some(name) = overrides.get(&source.id) {
-            let bytes = crate::fonts::load(fonts, name, &needed)?;
-            tokens.push(
-                doc.fonts_mut()
-                    .load_true_type_from_bytes(&bytes, true)
-                    .map_err(|_| PreviewError::FontUnavailable)?,
-            );
-        } else if let Some(token) = replacement {
-            tokens.push(token);
-        } else if let Some(recovered) = recovered_tokens.get(token) {
-            tokens.push(*recovered);
-        } else if usable
-            && *embedded
-            && original_encoding_roundtrips(&mut doc, *token, &face_needed)?
-        {
-            recovered_tokens.insert(*token, *token);
-            tokens.push(*token);
-        } else if usable && *embedded {
-            // A Unicode cmap in the font file does not mean the PDF's original
-            // encoding can encode new text (even spaces). Load a fresh Unicode
-            // font resource while retaining the exact embedded outlines.
-            let loaded = doc
-                .fonts_mut()
-                .load_true_type_from_bytes(bytes.as_ref().unwrap(), true)
-                .map_err(|_| PreviewError::FontUnavailable)?;
-            recovered_tokens.insert(*token, loaded);
-            tokens.push(loaded);
-        } else if usable {
-            tokens.push(*token);
-        } else {
-            let bytes = crate::fonts::same_face_in_document(
-                &doc,
-                &source.font,
-                bytes.as_deref().map(Vec::as_slice).filter(|_| *embedded),
-                face_needed,
-            )?;
-            let recovered = doc
-                .fonts_mut()
-                .load_true_type_from_bytes(&bytes, true)
-                .map_err(|_| PreviewError::FontUnavailable)?;
-            recovered_tokens.insert(*token, recovered);
-            tokens.push(recovered);
-        }
-        let probe = needed
-            .chars()
-            .find(|c| !c.is_whitespace())
-            .unwrap_or(' ')
-            .to_string();
-        expected_styles[i].font =
-            PdfPageTextObject::new(&doc, probe, tokens[i], PdfPoints::new(source.font_size))
-                .map_err(|_| PreviewError::EditFailed)?
-                .font()
-                .name();
-    }
+    let (tokens, expected_styles, needed_by_style) = font_plan::resolve(
+        &mut doc,
+        index,
+        &sources,
+        &new,
+        &styles,
+        value,
+        fonts,
+        replacement_font,
+        overrides,
+    )?;
     let mut advances = HashMap::new();
     let mut measure_tails = HashMap::new();
     let mut measured_advances = HashMap::new();
@@ -889,7 +756,7 @@ pub(crate) fn delete_text(
     Ok(bytes)
 }
 
-fn patch_short_edit(
+fn patch_source_edit(
     pdfium: &Pdfium,
     original: &[u8],
     index: i32,
@@ -900,23 +767,30 @@ fn patch_short_edit(
 ) -> Option<Vec<u8>> {
     let old: Vec<char> = group.text.chars().collect();
     let new: Vec<char> = value.chars().collect();
-    if old.len() != new.len() || old == new {
+    if old == new {
         return None;
     }
-    let start = old.iter().zip(&new).position(|(a, b)| a != b)?;
-    let end = old.iter().zip(&new).rposition(|(a, b)| a != b)? + 1;
-    if end - start > 32 {
+    let start = old.iter().zip(&new).take_while(|(a, b)| a == b).count();
+    let (mut old_end, mut new_end) = (old.len(), new.len());
+    while old_end > start && new_end > start && old[old_end - 1] == new[new_end - 1] {
+        old_end -= 1;
+        new_end -= 1;
+    }
+    if (old_end - start).max(new_end - start) > 32 {
         return None;
     }
     let run = group
         .runs
         .iter()
-        .find(|r| r.start <= start && r.end >= end && r.object_start == 0)?;
+        .find(|r| r.start <= start && r.end >= old_end && r.object_start == 0)?;
     let source = objects.iter().find(|o| o.id == run.object)?;
     if run.end - run.start != source.text.chars().count() {
         return None;
     }
-    let text: String = new[run.start..run.end].iter().collect();
+    let end = run
+        .end
+        .checked_add_signed(new.len() as isize - old.len() as isize)?;
+    let text: String = new.get(run.start..end)?.iter().collect();
     let bytes =
         crate::content_stream::text_patch::patch(original, index, objects, source.id, &text)?;
     let doc = pdfium.load_pdf_from_byte_vec(bytes.clone(), None).ok()?;

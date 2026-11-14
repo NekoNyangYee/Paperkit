@@ -115,38 +115,125 @@ pub(crate) fn paste_image(
     let document = pdfium
         .load_pdf_from_byte_vec(original.to_vec(), None)
         .map_err(|_| PreviewError::EditFailed)?;
-    let object = image_from_png(&document, png)?;
-    insert(pdfium, original, &document, index, object)
+    if !document
+        .permissions()
+        .can_modify_document_content()
+        .unwrap_or(false)
+        || !document.signatures().is_empty()
+    {
+        return Err(PreviewError::UnsupportedText);
+    }
+    let (image_width, image_height, pixels) = png_pixels(png)?;
+    let page = document
+        .pages()
+        .get(index)
+        .map_err(|_| PreviewError::InvalidPage)?;
+    let config = PdfRenderConfig::new()
+        .set_target_width(800)
+        .set_maximum_height(2200);
+    let bitmap = page
+        .render_with_config(&config)
+        .map_err(|_| PreviewError::RenderFailed)?;
+    let (width, height) = (bitmap.width(), bitmap.height());
+    drop(bitmap);
+    let pixels_per_point = width as f32 / page.width().value;
+    let scale = (width as f32 * 0.8 / image_width as f32)
+        .min(height as f32 * 0.8 / image_height as f32)
+        .min(pixels_per_point);
+    let left = (width as f32 * 0.05).round() as i32;
+    let top = (height as f32 * 0.05).round() as i32;
+    let right = left + (image_width as f32 * scale).round().max(1.) as i32;
+    let bottom = top + (image_height as f32 * scale).round().max(1.) as i32;
+    let convert = |x, y| {
+        page.pixels_to_points(x, y, &config)
+            .map_err(|_| PreviewError::EditFailed)
+    };
+    let (x, y) = convert(left, bottom)?;
+    let (rx, ry) = convert(right, bottom)?;
+    let (tx, ty) = convert(left, top)?;
+    let matrix = [
+        rx.value - x.value,
+        ry.value - y.value,
+        tx.value - x.value,
+        ty.value - y.value,
+        x.value,
+        y.value,
+    ];
+    let count = page.objects().len();
+    drop(page);
+    let bytes = crate::content_stream::stamps::append(
+        original,
+        image_width,
+        image_height,
+        &pixels,
+        &[(index, matrix)],
+        false,
+    )?;
+    verify_insert(
+        pdfium,
+        original,
+        bytes,
+        index,
+        count,
+        [[left, top], [right, top], [right, bottom], [left, bottom]],
+    )
 }
 
-pub(super) fn image_from_png<'a>(
-    document: &PdfDocument<'a>,
-    png: &[u8],
-) -> Result<PdfPageObject<'a>, PreviewError> {
-    let (width, height, mut bgra) = png_pixels(png)?;
-    let bitmap = PdfBitmap::from_bytes(
-        width as i32,
-        height as i32,
-        PdfBitmapFormat::BGRA,
-        &mut bgra,
-    )
-    .map_err(|_| PreviewError::EditFailed)?;
-    let mut object = PdfPageImageObject::new(document).map_err(|_| PreviewError::EditFailed)?;
-    object
-        .set_bitmap(&bitmap)
-        .map_err(|_| PreviewError::EditFailed)?;
-    // Image objects use a unit square, independent of their pixel dimensions.
-    object
-        .reset_matrix(PdfMatrix::new(
-            width as f32,
-            0.0,
-            0.0,
-            height as f32,
-            0.0,
-            0.0,
-        ))
-        .map_err(|_| PreviewError::EditFailed)?;
-    Ok(object.into())
+fn verify_insert(
+    pdfium: &Pdfium,
+    original: &[u8],
+    bytes: Vec<u8>,
+    index: i32,
+    count: usize,
+    region: [[i32; 2]; 4],
+) -> Result<Vec<u8>, PreviewError> {
+    let baseline = pdfium
+        .load_pdf_from_byte_vec(original.to_vec(), None)
+        .map_err(|_| PreviewError::VerificationFailed)?;
+    let reopened = pdfium
+        .load_pdf_from_byte_vec(bytes.clone(), None)
+        .map_err(|_| PreviewError::VerificationFailed)?;
+    if baseline.pages().len() != reopened.pages().len() {
+        return Err(PreviewError::VerificationFailed);
+    }
+    let config = PdfRenderConfig::new()
+        .set_target_width(800)
+        .set_maximum_height(2200);
+    for i in 0..baseline.pages().len() {
+        let old = baseline
+            .pages()
+            .get(i)
+            .map_err(|_| PreviewError::VerificationFailed)?;
+        let new = reopened
+            .pages()
+            .get(i)
+            .map_err(|_| PreviewError::VerificationFailed)?;
+        if i == index && new.objects().len() != count + 1 {
+            return Err(PreviewError::VerificationFailed);
+        }
+        let a = old
+            .render_with_config(&config)
+            .map_err(|_| PreviewError::VerificationFailed)?;
+        let b = new
+            .render_with_config(&config)
+            .map_err(|_| PreviewError::VerificationFailed)?;
+        if a.width() != b.width()
+            || a.height() != b.height()
+            || !super::verification::unchanged_outside(
+                &a.as_rgba_bytes(),
+                &b.as_rgba_bytes(),
+                a.width() as usize,
+                if i == index {
+                    std::slice::from_ref(&region)
+                } else {
+                    &[]
+                },
+            )
+        {
+            return Err(PreviewError::OutsideEditModified);
+        }
+    }
+    Ok(bytes)
 }
 
 pub(super) fn png_pixels(png: &[u8]) -> Result<(u32, u32, Vec<u8>), PreviewError> {
@@ -390,21 +477,33 @@ pub(crate) fn edit(
             .remove_object_at_index(id)
             .map_err(|_| PreviewError::StaleObject)?;
     }
-    page.regenerate_content()
-        .map_err(|_| PreviewError::EditFailed)?;
-    drop(page);
-    let bytes = document
-        .save_to_bytes()
-        .map_err(|_| PreviewError::EditFailed)?;
-    let bytes = crate::content_stream::text_spacing::preserve(
-        pdfium,
-        original,
-        bytes,
-        index,
-        &before.objects,
-        &Default::default(),
-        0,
-    )?;
+    let surgical =
+        crate::content_stream::graphics::edit(original, index, &before.graphics, id, matrix);
+    let bytes = match surgical {
+        Ok(bytes) => {
+            drop(page);
+            bytes
+        }
+        Err(PreviewError::UnsupportedText) => {
+            // Unmapped/inline-image content retains the old private-candidate
+            // path and all preservation checks, rather than guessing an ID.
+            page.regenerate_content()
+                .map_err(|_| PreviewError::EditFailed)?;
+            drop(page);
+            crate::content_stream::text_spacing::preserve(
+                pdfium,
+                original,
+                document
+                    .save_to_bytes()
+                    .map_err(|_| PreviewError::EditFailed)?,
+                index,
+                &before.objects,
+                &Default::default(),
+                0,
+            )?
+        }
+        Err(error) => return Err(error),
+    };
     let old = pdfium
         .load_pdf_from_byte_vec(original.to_vec(), None)
         .map_err(|_| PreviewError::VerificationFailed)?;
