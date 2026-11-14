@@ -30,7 +30,8 @@ erDiagram
 - 로컬 개발 DB: `.cache/dev-backend/paperkit.sqlite3`.
 - 문서함은 원본 PDF의 경로 등 메타데이터를 기록한다. 목록 등록만으로 원본 PDF를 서버에 올리지는 않는다. 복구 PDF 저장은 별도 API다.
 - 도구의 `content`: 문구/워터마크는 문자열, 이미지/서명은 `data:image/png;base64,...`. 계정당 최대 50개, PNG 원본 최대 1 MiB, 문구 최대 4,000자.
-- 현재 데스크톱의 탭 복원은 PC의 `workspace.json`도 사용한다. 서버의 workspaces/recovery/draft 테이블이 존재한다고 모든 현재 편집 상태가 자동 동기화되는 것은 아니다.
+- 현재 데스크톱의 탭 복원은 PC의 `workspace.json`에 `workspace:<사용자 ID>` 키와 소유자 정보를 함께 저장한다. 비로그인 탭은 저장·복원하지 않는다. 이전 버전의 소유자 없는 `workspace` 키는 삭제하며 특정 계정에 자동 배정하지 않는다. 서버의 workspaces/recovery/draft 테이블이 존재한다고 모든 현재 편집 상태가 자동 동기화되는 것은 아니다.
+- 문서함·도구함 조회는 TanStack Query의 계정별 메모리 캐시를 사용한다. 같은 쿼리의 동시 요청을 합치고 60초 동안 재사용하며, 추가·수정·삭제 시 무효화한다. 계정 변경·로그아웃 시 진행 중 요청을 취소하고 전체 목록 캐시를 비운다. 서버의 사용자 인증과 소유권 검사는 매 요청마다 유지한다.
 - PDF 엔진의 실행 취소/다시 실행 이력은 열린 편집 세션의 메모리에서 관리하며 별도 SQL 이력 테이블은 없다.
 
 스키마 원본: [001_core.sql](migrations/001_core.sql), [002_ownership.sql](migrations/002_ownership.sql), [003_library.sql](migrations/003_library.sql), [004_signature_tools.sql](migrations/004_signature_tools.sql).

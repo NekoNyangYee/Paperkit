@@ -1,5 +1,6 @@
 import { Channel, invoke } from "@tauri-apps/api/core";
 import type { EditState, TextObject, TextGroup, EditAction, FontInfo, PreviewPage } from "./types";
+import { previewCache } from "./preview-cache";
 
 export async function listFonts(): Promise<FontInfo[]> {
   const fonts = await invoke<unknown>("list_fonts");
@@ -84,6 +85,7 @@ export async function editDocument(
 ): Promise<EditState> {
   const value = await invoke<unknown>("edit_document", { fileId, revision, action });
   if (!isState(value)) throw new Error("문서 상태 응답이 올바르지 않습니다.");
+  previewCache.applyEdit(fileId, action, value);
   return value;
 }
 
@@ -169,5 +171,6 @@ async function renderPageResponse(
 }
 
 export async function releasePreview(fileId: string): Promise<void> {
+  previewCache.clearFile(fileId);
   await invoke("release_preview", { fileId });
 }

@@ -1,4 +1,5 @@
 import { act, cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
+import { StrictMode } from "react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   request: vi.fn(),
@@ -188,6 +189,7 @@ function login(id = "owner-a") {
 beforeEach(() => {
   login();
   useFileStore.setState({
+    scopeOwner: "owner-a",
     ready: true,
     phase: "idle",
     receive: mocks.receive,
@@ -454,4 +456,87 @@ it("does not show a previous account's tools when a late request completes", asy
   });
   await waitFor(() => expect(mocks.tools).toHaveBeenCalledWith("owner-b"));
   expect(screen.queryByText("이전 계정의 문구")).toBeNull();
+});
+
+it("registers an opened document once across StrictMode, tab switches and token rotations", async () => {
+  const file = { id: "dedup-open", path: "C:/dedup.pdf", name: "dedup.pdf", sizeBytes: 100 };
+  useFileStore.setState({ file, openedFileId: file.id });
+  const view = render(
+    <StrictMode>
+      <LibrarySync />
+    </StrictMode>,
+  );
+  await waitFor(() => expect(mocks.request).toHaveBeenCalledOnce());
+  act(() => useFileStore.setState({ file: null, openedFileId: null }));
+  act(() => useFileStore.setState({ file, openedFileId: file.id }));
+  act(() =>
+    useAuthStore.setState({
+      session: { user: { id: "owner-a" }, access_token: "renewed" } as never,
+    }),
+  );
+  view.unmount();
+  render(<LibrarySync />);
+  await act(async () => {});
+  expect(mocks.request).toHaveBeenCalledOnce();
+});
+
+it("does not register a guest or another account's open file after login", async () => {
+  const file = { id: "guest-open", path: "C:/guest.pdf", name: "guest.pdf", sizeBytes: 100 };
+  act(() => useAuthStore.setState({ session: null }));
+  useFileStore.setState({ scopeOwner: null, file, openedFileId: file.id });
+  render(<LibrarySync />);
+  act(() => login("owner-b"));
+  await act(async () => {});
+  expect(mocks.request).not.toHaveBeenCalled();
+});
+
+it("does not apply a late document registration after an A to B to A account change", async () => {
+  let finish!: (value: unknown) => void;
+  mocks.request.mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  const file = { id: "late-open", path: "C:/late.pdf", name: "late.pdf", sizeBytes: 100 };
+  useFileStore.setState({ file, openedFileId: file.id });
+  const view = render(<LibrarySync />);
+  view.unmount();
+  act(() => {
+    login("owner-b");
+    login("owner-a");
+  });
+  const revision = useDocumentStatus.getState().revision;
+  await act(async () => {
+    finish({});
+  });
+  expect(useDocumentStatus.getState().revision).toBe(revision);
+});
+
+it("does not reload a healthy document list just because its access token rotates", async () => {
+  render(<DocumentLibrary />);
+  await screen.findByText(document.displayName);
+  act(() =>
+    useAuthStore.setState({
+      session: { user: { id: "owner-a" }, access_token: "rotated" } as never,
+    }),
+  );
+  await act(async () => {});
+  expect(mocks.documents).toHaveBeenCalledOnce();
+});
+
+it("does not accept a stale tool update after returning to the original account", async () => {
+  let finish!: (value: typeof tool) => void;
+  mocks.request.mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  useToolStore.setState({ owner: "owner-a", tools: [tool] });
+  const pending = useToolStore.getState().update(tool.id, { ...tool, name: "late" }, "owner-a");
+  login("owner-b");
+  login("owner-a");
+  useToolStore.setState({ owner: "owner-a", tools: [tool] });
+  finish({ ...tool, name: "late" });
+  await pending;
+  expect(useToolStore.getState().tools).toEqual([tool]);
 });

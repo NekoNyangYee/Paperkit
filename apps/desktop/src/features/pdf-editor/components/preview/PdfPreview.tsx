@@ -43,6 +43,7 @@ import { errorMessage } from "@/shared/desktop/files";
 import { errorDetail, UserFacingError } from "@/shared/lib/errors";
 import { useEventCallback } from "@/shared/lib/use-event-callback";
 import { renderPage, releasePreview, editDocument, listFonts } from "@/shared/pdf/api";
+import { previewCache } from "@/shared/pdf/preview-cache";
 import { groupSelection } from "@/shared/pdf/selection";
 import type { FontInfo } from "@/shared/pdf/types";
 import type { TextSelection } from "@/shared/pdf/types";
@@ -372,120 +373,129 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
     }
   }, [pageIndex]);
 
-  useEffect(() => {
+  useLayoutEffect(() => {
     let disposed = false;
     fontPreparation.current++;
     const location = `${file.id}:${pageIndex}`;
     const samePage = renderedLocation.current === location;
-    setLoading(true);
-    setLoadPercent(0);
     setError(null);
-    if (!samePage) {
-      setPage(null);
+    const show = (result: PreviewPage) => {
+      setLoadPercent(100);
+      renderedLocation.current = location;
+      setPage(result);
       setSelected(null);
-    }
-    const timer = setTimeout(() => {
-      // Prepare one bounded, high-resolution page. Zoom never reruns PDF
-      // rendering, text extraction, loading progress or selection restoration.
-      void renderPage(file.id, pageIndex, 1600, (percent) => {
-        if (!disposed) setLoadPercent((previous) => Math.max(previous, percent));
-      })
-        .then(async (result) => {
-          if (disposed) return;
-          setLoadPercent(95);
-          // Decode before replacing the animated old bitmap to avoid a blank frame.
-          if (typeof Image.prototype.decode === "function") {
-            const image = new Image();
-            image.src = result.imageUrl;
-            await image.decode();
-          }
-          if (disposed) return;
-          setLoadPercent(100);
-          renderedLocation.current = location;
-          setPage(result);
-          setSelected(null);
-          if (!pendingSelection.current && !restoreSelection.current && !restoreBlock.current)
-            setInlineEditing(false);
-          setDraft("");
-          setBlockSize(null);
-          setPageCount(result.pageCount);
-          setEditState(result.state);
-          const previous = restoreSelection.current;
-          if (previous) {
-            const object = result.text.objects.find(
+      if (!pendingSelection.current && !restoreSelection.current && !restoreBlock.current)
+        setInlineEditing(false);
+      setDraft("");
+      setBlockSize(null);
+      setPageCount(result.pageCount);
+      setEditState(result.state);
+      const previous = restoreSelection.current;
+      if (previous) {
+        const object = result.text.objects.find(
+          (o) =>
+            o.text === previous.object.text &&
+            o.font
+              .replace(/[^a-z]/gi, "")
+              .toLowerCase()
+              .startsWith(previous.font.replace(/-/g, "")) &&
+            o.matrix.every((value, i) => Math.abs(value - previous.object.matrix[i]) < 0.01),
+        );
+        if (object) {
+          setSelected(object);
+          setDraft(object.text);
+        }
+        restoreSelection.current = null;
+      }
+      const pending = pendingSelection.current;
+      const converted = restoreBlock.current;
+      if (converted) {
+        const group = result.text.groups?.find(
+          (g) =>
+            g.kind === "paragraph" &&
+            g.runs.some((r) =>
+              result.text.objects.some(
+                (o) =>
+                  o.id === r.object &&
+                  Math.abs(o.matrix[4] - converted.matrix[4]) < 0.1 &&
+                  Math.abs(o.matrix[5] - converted.matrix[5]) < 0.1,
+              ),
+            ),
+        );
+        const next = group && groupSelection(group, result.text.objects);
+        if (next) {
+          setSelected(next);
+          setDraft(next.text);
+        }
+        restoreBlock.current = null;
+      }
+      if (pending) {
+        const next = pending.group
+          ? result.text.groups
+              ?.filter((g) => g.kind === pending.group!.kind && g.text === pending.text)
+              .map((g) => groupSelection(g, result.text.objects))
+              .find((o) => o && o.matrix.every((v, i) => Math.abs(v - pending.matrix[i]) < 0.01))
+          : result.text.objects.find(
               (o) =>
-                o.text === previous.object.text &&
-                o.font
-                  .replace(/[^a-z]/gi, "")
-                  .toLowerCase()
-                  .startsWith(previous.font.replace(/-/g, "")) &&
-                o.matrix.every((value, i) => Math.abs(value - previous.object.matrix[i]) < 0.01),
+                o.text === pending.text &&
+                o.matrix.every((v, i) => Math.abs(v - pending.matrix[i]) < 0.01),
             );
-            if (object) {
-              setSelected(object);
-              setDraft(object.text);
+        if (next) {
+          setSelected(next);
+          setDraft(next.text);
+        }
+        pendingSelection.current = null;
+      }
+    };
+    const cached = previewCache.get(file.id, pageIndex, 1600);
+    let timer: ReturnType<typeof setTimeout> | undefined;
+    if (cached) {
+      show(cached.page);
+      setLoading(false);
+    } else {
+      setLoading(true);
+      setLoadPercent(0);
+      if (!samePage) {
+        setPage(null);
+        setSelected(null);
+      }
+      timer = setTimeout(() => {
+        // Zoom uses this same bitmap. Only a cache miss crosses the native boundary.
+        void previewCache
+          .load(file.id, pageIndex, 1600, async () => {
+            const result = await renderPage(file.id, pageIndex, 1600, (percent) => {
+              if (!disposed) setLoadPercent((previous) => Math.max(previous, percent));
+            });
+            if (!disposed) setLoadPercent(95);
+            let image: HTMLImageElement | undefined;
+            if (typeof Image.prototype.decode === "function") {
+              image = new Image();
+              image.src = result.imageUrl;
+              await image.decode();
             }
-            restoreSelection.current = null;
-          }
-          const pending = pendingSelection.current;
-          const converted = restoreBlock.current;
-          if (converted) {
-            const group = result.text.groups?.find(
-              (g) =>
-                g.kind === "paragraph" &&
-                g.runs.some((r) =>
-                  result.text.objects.some(
-                    (o) =>
-                      o.id === r.object &&
-                      Math.abs(o.matrix[4] - converted.matrix[4]) < 0.1 &&
-                      Math.abs(o.matrix[5] - converted.matrix[5]) < 0.1,
-                  ),
-                ),
-            );
-            const next = group && groupSelection(group, result.text.objects);
-            if (next) {
-              setSelected(next);
-              setDraft(next.text);
+            return { page: result, image };
+          })
+          .then((value) => {
+            if (!disposed) show(value.page);
+          })
+          .catch((cause: unknown) => {
+            if (!disposed) {
+              const message = errorDetail(cause);
+              if (
+                !renderedLocation.current &&
+                pageIndex > 0 &&
+                message === "존재하지 않는 페이지입니다."
+              ) {
+                setPageIndex(0);
+                setPageInput("1");
+              } else setError(errorMessage(cause, "preview"));
             }
-            restoreBlock.current = null;
-          }
-          if (pending) {
-            const next = pending.group
-              ? result.text.groups
-                  ?.filter((g) => g.kind === pending.group!.kind && g.text === pending.text)
-                  .map((g) => groupSelection(g, result.text.objects))
-                  .find(
-                    (o) => o && o.matrix.every((v, i) => Math.abs(v - pending.matrix[i]) < 0.01),
-                  )
-              : result.text.objects.find(
-                  (o) =>
-                    o.text === pending.text &&
-                    o.matrix.every((v, i) => Math.abs(v - pending.matrix[i]) < 0.01),
-                );
-            if (next) {
-              setSelected(next);
-              setDraft(next.text);
-            }
-            pendingSelection.current = null;
-          }
-        })
-        .catch((cause: unknown) => {
-          if (!disposed) {
-            const message = errorDetail(cause);
-            if (
-              !renderedLocation.current &&
-              pageIndex > 0 &&
-              message === "존재하지 않는 페이지입니다."
-            ) {
-              setPageIndex(0);
-              setPageInput("1");
-            } else setError(errorMessage(cause, "preview"));
-          }
-        })
-        .finally(() => {
-          if (!disposed) setLoading(false);
-        });
-    }, 0);
+          })
+          .finally(() => {
+            if (!disposed) setLoading(false);
+          });
+      }, 0);
+    }
     return () => {
       disposed = true;
       fontPreparation.current++;
@@ -619,6 +629,7 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
       });
       if (typeof path !== "string") return;
       const matched = await invoke<string[]>("import_original_font", { path, expected });
+      previewCache.clearFile(file.id);
       clearOriginalFonts(file.id);
       setEditError(null);
       setFontGeneration((value) => value + 1);

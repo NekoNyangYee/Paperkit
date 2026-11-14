@@ -53,7 +53,7 @@ function useTools() {
   const state = useToolStore();
   useEffect(() => {
     const current = useToolStore.getState();
-    if (owner && (current.owner !== owner || current.error)) void current.load(owner);
+    if (owner) void current.load(owner);
   }, [owner, accessToken]);
   return { ...state, tools: state.owner === owner ? state.tools : [], owner };
 }

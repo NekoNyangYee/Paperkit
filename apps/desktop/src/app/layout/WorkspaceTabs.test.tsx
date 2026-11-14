@@ -1,7 +1,7 @@
 import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 vi.mock("@/shared/desktop/workspace", () => ({ writeWorkspace: async () => {} }));
-vi.mock("@/shared/desktop/files", () => ({ closeFile: async () => {} }));
+vi.mock("@/shared/desktop/files", () => ({ closeFile: async () => {}, isDesktop: () => true }));
 import { useFileStore } from "@/features/file-input/model/file-store";
 import { WorkspaceTabs } from "./WorkspaceTabs";
 

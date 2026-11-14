@@ -2,6 +2,8 @@ import { authConfig, supabase } from "@/features/auth/lib/client";
 import { useAuthStore } from "@/features/auth/model/auth-store";
 import { UserFacingError, errorFallbacks } from "@/shared/lib/errors";
 import { requestSession, refreshRequestSession } from "@/features/auth/lib/request-session";
+import { captureAccount, accountIsCurrent } from "@/features/auth/lib/account-scope";
+import { cachedLibraryRead, invalidateLibrary } from "./query-cache";
 
 export interface LibraryDocument {
   id: string;
@@ -28,8 +30,10 @@ export async function libraryRequest<T>(
 ): Promise<T> {
   if (!supabase || !authConfig || !owner)
     throw new UserFacingError("로그인한 뒤 다시 이용해 주세요.");
-  const sameOwner = () => useAuthStore.getState().session?.user.id === owner;
+  const scope = captureAccount(owner);
+  const sameOwner = () => accountIsCurrent(scope);
   const session = await requestSession(owner);
+  if (!sameOwner()) throw new UserFacingError("계정이 바뀌었습니다. 다시 선택해 주세요.");
   const options: RequestInit = {
     ...init,
     headers: {
@@ -38,7 +42,7 @@ export async function libraryRequest<T>(
       Authorization: `Bearer ${session.access_token}`,
     },
     signal: AbortSignal.any(
-      [init.signal, AbortSignal.timeout(20000)].filter((s): s is AbortSignal => !!s),
+      [init.signal, scope.signal, AbortSignal.timeout(20000)].filter((s): s is AbortSignal => !!s),
     ),
     redirect: "error",
     cache: "no-store",
@@ -113,6 +117,7 @@ export async function libraryRequest<T>(
     throw new UserFacingError(fallback, { cause });
   }
   if (!sameOwner()) throw new UserFacingError("로그인을 다시 확인해 주세요.");
+  if (!read) invalidateLibrary(owner, path.includes("/tools") ? "tools" : "documents");
   return value as T;
 }
 
@@ -132,44 +137,51 @@ function retryDelay(signal?: AbortSignal | null) {
 }
 
 export async function getTools(owner: string) {
-  const values = await libraryRequest<LibraryTool[]>("/library/tools", {}, owner);
-  if (
-    !Array.isArray(values) ||
-    !values.every(
-      (v) =>
-        v &&
-        typeof v.id === "string" &&
-        typeof v.name === "string" &&
-        ["image", "text", "watermark", "signature"].includes(v.kind) &&
-        typeof v.content === "string" &&
-        Number.isFinite(v.createdAt) &&
-        (!["image", "signature"].includes(v.kind) ||
-          v.content.startsWith("data:image/png;base64,")),
+  return cachedLibraryRead(owner, "tools", "", async (signal) => {
+    const values = await libraryRequest<LibraryTool[]>("/library/tools", { signal }, owner);
+    if (
+      !Array.isArray(values) ||
+      !values.every(
+        (v) =>
+          v &&
+          typeof v.id === "string" &&
+          typeof v.name === "string" &&
+          ["image", "text", "watermark", "signature"].includes(v.kind) &&
+          typeof v.content === "string" &&
+          Number.isFinite(v.createdAt) &&
+          (!["image", "signature"].includes(v.kind) ||
+            v.content.startsWith("data:image/png;base64,")),
+      )
     )
-  )
-    throw new Error("도구함 응답을 읽지 못했습니다.");
-  return values;
+      throw new Error("도구함 응답을 읽지 못했습니다.");
+    return values;
+  });
 }
 
 export async function getDocuments(query: URLSearchParams, signal: AbortSignal, owner: string) {
-  const values = await libraryRequest<LibraryDocument[]>(
-    `/library/documents?${query}`,
-    { signal },
-    owner,
-  );
-  if (
-    !Array.isArray(values) ||
-    !values.every(
-      (v) =>
-        v &&
-        typeof v.id === "string" &&
-        typeof v.sourcePath === "string" &&
-        typeof v.displayName === "string" &&
-        Number.isFinite(v.sizeBytes) &&
-        Number.isFinite(v.lastOpenedAt) &&
-        typeof v.favorite === "boolean",
+  const params = new URLSearchParams(query);
+  params.sort();
+  if (signal.aborted) throw new DOMException("Cancelled", "AbortError");
+  return cachedLibraryRead(owner, "documents", params.toString(), async (sharedSignal) => {
+    const values = await libraryRequest<LibraryDocument[]>(
+      `/library/documents?${params}`,
+      { signal: sharedSignal },
+      owner,
+    );
+    if (
+      !Array.isArray(values) ||
+      !values.every(
+        (v) =>
+          v &&
+          typeof v.id === "string" &&
+          typeof v.sourcePath === "string" &&
+          typeof v.displayName === "string" &&
+          Number.isFinite(v.sizeBytes) &&
+          Number.isFinite(v.lastOpenedAt) &&
+          typeof v.favorite === "boolean",
+      )
     )
-  )
-    throw new Error("문서함 응답을 읽지 못했습니다.");
-  return values;
+      throw new Error("문서함 응답을 읽지 못했습니다.");
+    return values;
+  });
 }

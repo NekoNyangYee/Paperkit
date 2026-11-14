@@ -78,6 +78,9 @@ async function mount() {
   await waitFor(() => expect(useFileStore.getState().ready).toBe(true));
   return result;
 }
+function selectOriginalInMemory() {
+  act(() => useFileStore.setState({ file: original, openedFileId: null, phase: "selected" }));
+}
 
 beforeEach(() => {
   mocks.invoke.mockReset();
@@ -137,7 +140,9 @@ describe("file input UI → Zustand → IPC adapter (native IPC mocked)", () => 
     mocks.invoke.mockImplementation(async (command, args) =>
       command === "synchronize_selection"
         ? snapshot(1)
-        : snapshot(args.revision, args.paths[0] === original.path ? original : replacement),
+        : command === "clear_selection"
+          ? snapshot(args.revision)
+          : snapshot(args.revision, args.paths[0] === original.path ? original : replacement),
     );
     mocks.open.mockResolvedValueOnce(original.path).mockResolvedValueOnce(replacement.path);
     render(<App />);
@@ -168,6 +173,7 @@ describe("file input UI → Zustand → IPC adapter (native IPC mocked)", () => 
     );
     mocks.open.mockResolvedValue(replacement.path);
     await mount();
+    selectOriginalInMemory();
     fireEvent.click(screen.getByRole("button", { name: "다른 파일 선택" }));
     const image = await screen.findByRole("img", { name: "선택한 PDF의 첫 페이지" });
     expect(image.getAttribute("src")).toBe("data:image/png;base64,NEW");
@@ -198,6 +204,8 @@ describe("file input UI → Zustand → IPC adapter (native IPC mocked)", () => 
     );
     mocks.open.mockResolvedValue(replacement.path);
     render(<App />);
+    await waitFor(() => expect(useFileStore.getState().ready).toBe(true));
+    selectOriginalInMemory();
     await screen.findByText(original.name);
     fireEvent.click(screen.getByRole("button", { name: "다른 파일 선택" }));
     await screen.findByText("PDF 미리보기 화면");
@@ -220,16 +228,17 @@ describe("file input UI → Zustand → IPC adapter (native IPC mocked)", () => 
     );
     expect(mocks.invoke).toHaveBeenCalledWith("receive_file_input", {
       paths: [original.path],
-      revision: 2,
+      revision: 3,
     });
     await screen.findByRole("img", { name: "선택한 PDF의 첫 페이지" });
     expect(mocks.render).toHaveBeenCalledWith(original.id, 0, 1600);
     expect(screen.queryByRole("button", { name: "선택 해제" })).toBeNull();
   });
 
-  it("cancelling the dialog retains restored metadata without validation", async () => {
+  it("cancelling the dialog retains the current session's selected file without validation", async () => {
     mocks.invoke.mockResolvedValue(snapshot(5, original));
     await mount();
+    selectOriginalInMemory();
     fireEvent.click(screen.getByRole("button", { name: "다른 파일 선택" }));
     await waitFor(() =>
       expect(
@@ -237,7 +246,7 @@ describe("file input UI → Zustand → IPC adapter (native IPC mocked)", () => 
       ).toBe(false),
     );
     expect(screen.getByText(original.name)).toBeTruthy();
-    expect(mocks.invoke).toHaveBeenCalledTimes(1);
+    expect(mocks.invoke).toHaveBeenCalledTimes(3);
   });
 
   it("disables opening while a replacement file is being checked", async () => {
@@ -247,6 +256,7 @@ describe("file input UI → Zustand → IPC adapter (native IPC mocked)", () => 
       command === "receive_file_input" ? pending.promise : snapshot(1, original),
     );
     await mount();
+    selectOriginalInMemory();
     fireEvent.click(screen.getByRole("button", { name: "다른 파일 선택" }));
     await waitFor(() => expect(useFileStore.getState().phase).toBe("checking"));
     expect((screen.getByRole("button", { name: "PDF 열기" }) as HTMLButtonElement).disabled).toBe(
@@ -267,7 +277,7 @@ describe("file input UI → Zustand → IPC adapter (native IPC mocked)", () => 
     drag("over", [], 600, 600);
     expect(screen.getByRole("heading", { name: "PDF 파일을 끌어다 놓으세요" })).toBeTruthy();
     drag("drop", [original.path], 600, 600);
-    expect(mocks.invoke).toHaveBeenCalledTimes(1);
+    expect(mocks.invoke).toHaveBeenCalledTimes(2);
     drag("drop", [original.path], 225, 225);
     await screen.findByText(original.name);
   });
@@ -279,9 +289,18 @@ describe("file input UI → Zustand → IPC adapter (native IPC mocked)", () => 
         : snapshot(args.revision, original, "PDF 한 개만 선택해 주세요."),
     );
     await mount();
+    selectOriginalInMemory();
     drag("drop", ["a.pdf", "b.pdf"]);
     expect((await screen.findByRole("alert")).textContent).toContain("한 개씩 선택");
     expect(screen.getByText(original.name)).toBeTruthy();
+  });
+
+  it("does not restore a previous native selection into a guest session", async () => {
+    mocks.invoke.mockResolvedValue(snapshot(5, original));
+    await mount();
+    expect(screen.queryByText(original.name)).toBeNull();
+    expect(useFileStore.getState().file).toBeNull();
+    expect(mocks.render).not.toHaveBeenCalled();
   });
 
   it("ignores an earlier response that arrives after the latest drop", async () => {
@@ -289,7 +308,7 @@ describe("file input UI → Zustand → IPC adapter (native IPC mocked)", () => 
     mocks.invoke.mockImplementation(async (command, args) =>
       command === "synchronize_selection"
         ? snapshot(1)
-        : args.revision === 2
+        : command === "receive_file_input" && args.revision === 3
           ? first.promise
           : snapshot(args.revision, replacement),
     );

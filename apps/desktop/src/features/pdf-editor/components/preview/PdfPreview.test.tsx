@@ -2357,3 +2357,99 @@ it("scrolls to later pages without rendering every thumbnail at once", async () 
     ).length,
   ).toBeLessThan(25);
 });
+
+it("instantly revisits a decoded page without native rendering, PNG decoding or loading UI", async () => {
+  const decode = vi.fn().mockResolvedValue(undefined);
+  useFileStore.setState({
+    tabs: [{ id: "cache-tab", file, view: { pageIndex: 0, zoom: 100, sidebarOpen: false } }],
+    activeTabId: "cache-tab",
+  });
+  vi.stubGlobal(
+    "Image",
+    class {
+      src = "";
+      decode() {
+        return decode();
+      }
+    },
+  );
+  render(<PdfPreview file={file} />);
+  await screen.findByRole("img", { name: "example.pdf · 1페이지" });
+  fireEvent.click(screen.getByRole("button", { name: "다음 페이지" }));
+  await screen.findByRole("img", { name: "example.pdf · 2페이지" });
+  const nativeRenders = () =>
+    mocks.invoke.mock.calls.filter(
+      ([command, args]) => command === "render_selected_page" && args.width === 1600,
+    );
+  expect(nativeRenders()).toHaveLength(2);
+  expect(decode).toHaveBeenCalledTimes(2);
+  fireEvent.click(screen.getByRole("button", { name: "이전 페이지" }));
+  expect(screen.getByRole("img", { name: "example.pdf · 1페이지" })).toBeTruthy();
+  expect(screen.queryByRole("progressbar", { name: "페이지 로딩 진행률" })).toBeNull();
+  expect(nativeRenders()).toHaveLength(2);
+  expect(decode).toHaveBeenCalledTimes(2);
+  fireEvent.click(screen.getByRole("button", { name: "다음 페이지" }));
+  expect(screen.getByRole("img", { name: "example.pdf · 2페이지" })).toBeTruthy();
+  expect(nativeRenders()).toHaveLength(2);
+});
+
+it("keeps an untouched page cached after editing another page without rolling back the edit revision", async () => {
+  let revision = 0;
+  mocks.invoke.mockImplementation(async (command, args) => {
+    const state = { revision, dirty: revision > 0, canUndo: revision > 0, canRedo: false };
+    if (command === "render_selected_page")
+      return {
+        ...page(args.pageIndex, args.width),
+        state,
+        text: { objects: [object], warning: null },
+      };
+    if (command === "editing_background") return "data:image/png;base64,AA==";
+    if (command === "edit_document")
+      return { ...state, revision: ++revision, dirty: true, canUndo: true };
+  });
+  render(<PdfPreview file={file} />);
+  await enableEditing("object");
+  fireEvent.click(screen.getByRole("button", { name: "다음 페이지" }));
+  await screen.findByRole("img", { name: "example.pdf · 2페이지" });
+  fireEvent.click(screen.getByRole("button", { name: "이전 페이지" }));
+  fireEvent.click(screen.getByRole("button", { name: "텍스트 선택: Hello World" }));
+  fireEvent.keyDown(window, { key: "Delete" });
+  await waitFor(() =>
+    expect(
+      (screen.getByRole("button", { name: "다음 페이지" }) as HTMLButtonElement).disabled,
+    ).toBe(false),
+  );
+  fireEvent.click(screen.getByRole("button", { name: "다음 페이지" }));
+  expect(screen.getByRole("img", { name: "example.pdf · 2페이지" })).toBeTruthy();
+  expect(
+    mocks.invoke.mock.calls.filter(
+      ([cmd, args]) =>
+        cmd === "render_selected_page" && args.width === 1600 && args.pageIndex === 1,
+    ),
+  ).toHaveLength(1);
+  expect((screen.getByRole("button", { name: "실행 취소" }) as HTMLButtonElement).disabled).toBe(
+    false,
+  );
+  fireEvent.click(screen.getByRole("button", { name: "텍스트 선택: Hello World" }));
+  fireEvent.keyDown(window, { key: "Delete" });
+  await waitFor(() =>
+    expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
+      fileId: file.id,
+      revision: 1,
+      action: { kind: "replace", page: 1, object: 0, text: "" },
+    }),
+  );
+});
+
+it("releases cached page content when the document closes", async () => {
+  const first = render(<PdfPreview file={file} />);
+  await screen.findByRole("img", { name: "example.pdf · 1페이지" });
+  first.unmount();
+  render(<PdfPreview file={file} />);
+  await screen.findByRole("img", { name: "example.pdf · 1페이지" });
+  expect(
+    mocks.invoke.mock.calls.filter(
+      ([cmd, args]) => cmd === "render_selected_page" && args.width === 1600,
+    ),
+  ).toHaveLength(2);
+});

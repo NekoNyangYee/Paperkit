@@ -4,13 +4,17 @@ import { LibrarySync } from "@/features/library/components/LibrarySync";
 import { PdfPreview } from "@/features/pdf-editor/components/preview/PdfPreview";
 import { useFileStore } from "@/features/file-input/model/file-store";
 import { useEffect, useState } from "react";
+import { useAuthStore } from "@/features/auth/model/auth-store";
 
 export function App() {
   const file = useFileStore((state) => state.file);
   const openedFileId = useFileStore((state) => state.openedFileId);
   const tabs = useFileStore((state) => state.tabs);
   const activeTabId = useFileStore((state) => state.activeTabId);
+  const scopeOwner = useFileStore((state) => state.scopeOwner);
+  const changingAccount = useAuthStore((state) => state.busy);
   const [visited, setVisited] = useState<Set<string>>(() => new Set());
+  useEffect(() => setVisited(new Set()), [scopeOwner]);
   useEffect(() => {
     if (openedFileId) setVisited((previous) => new Set(previous).add(activeTabId));
   }, [activeTabId, openedFileId]);
@@ -18,7 +22,7 @@ export function App() {
     <div className="flex h-screen flex-col overflow-hidden">
       <TitleBar />
       <LibrarySync />
-      <div className="min-h-0 flex-1 overflow-auto">
+      <div className="min-h-0 flex-1 overflow-auto" inert={changingAccount}>
         {tabs.map(
           (tab) =>
             tab.file &&
@@ -31,7 +35,7 @@ export function App() {
                 hidden={tab.id !== activeTabId}
                 className="h-full"
               >
-                <PdfPreview file={tab.file} active={tab.id === activeTabId} />
+                <PdfPreview file={tab.file} active={tab.id === activeTabId && !changingAccount} />
               </div>
             ),
         )}

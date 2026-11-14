@@ -1,5 +1,11 @@
 import { expect, it, vi } from "vitest";
-const mocks = vi.hoisted(() => ({ load: vi.fn(), get: vi.fn(), set: vi.fn(), save: vi.fn() }));
+const mocks = vi.hoisted(() => ({
+  load: vi.fn(),
+  get: vi.fn(),
+  set: vi.fn(),
+  save: vi.fn(),
+  delete: vi.fn(),
+}));
 vi.mock("./files", () => ({ isDesktop: () => true }));
 vi.mock("@tauri-apps/plugin-store", () => ({ load: mocks.load }));
 import { flushWorkspace, parseWorkspace, readWorkspace, writeWorkspace } from "./workspace";
@@ -29,10 +35,18 @@ it("validates persisted schema, duplicate IDs and view bounds", () => {
 it("uses Tauri Store, serializes writes, recovers after errors, and flushes on exit", async () => {
   const first = { version: 1 as const, activeTabId: "a", tabs: [{ id: "a", path: "a.pdf" }] };
   const second = { ...first, activeTabId: "b" };
-  mocks.load.mockResolvedValue({ get: mocks.get, set: mocks.set, save: mocks.save });
-  mocks.get.mockResolvedValue(first);
-  expect(await readWorkspace()).toEqual(first);
+  mocks.load.mockResolvedValue({
+    get: mocks.get,
+    set: mocks.set,
+    save: mocks.save,
+    delete: mocks.delete,
+  });
+  mocks.delete.mockResolvedValueOnce(true);
+  mocks.get.mockResolvedValue({ owner: "owner-a", workspace: first });
+  expect(await readWorkspace("owner-a")).toEqual(first);
+  expect(mocks.get).toHaveBeenLastCalledWith("workspace:owner-a");
   expect(mocks.load).toHaveBeenCalledWith("workspace.json", { autoSave: 150 });
+  expect(mocks.delete).toHaveBeenCalledExactlyOnceWith("workspace");
   let finish!: () => void;
   mocks.set.mockImplementationOnce(
     () =>
@@ -40,15 +54,36 @@ it("uses Tauri Store, serializes writes, recovers after errors, and flushes on e
         finish = resolve;
       }),
   );
-  const writingFirst = writeWorkspace(first);
-  const writingSecond = writeWorkspace(second);
+  const writingFirst = writeWorkspace(first, "owner-a");
+  const writingSecond = writeWorkspace(second, "owner-b");
   await vi.waitFor(() => expect(mocks.set).toHaveBeenCalledTimes(1));
   finish();
   await Promise.all([writingFirst, writingSecond]);
-  expect(mocks.set.mock.calls.map((call) => call[1])).toEqual([first, second]);
+  expect(mocks.set.mock.calls).toEqual([
+    ["workspace:owner-a", { owner: "owner-a", workspace: first }],
+    ["workspace:owner-b", { owner: "owner-b", workspace: second }],
+  ]);
   mocks.set.mockRejectedValueOnce(new Error("disk full"));
-  await expect(writeWorkspace(first)).rejects.toThrow("disk full");
-  await writeWorkspace(second);
+  await expect(writeWorkspace(first, "owner-a")).rejects.toThrow("disk full");
+  await writeWorkspace(second, "owner-b");
   await flushWorkspace();
-  expect(mocks.save).toHaveBeenCalledTimes(1);
+  expect(mocks.save).toHaveBeenCalledTimes(2);
+});
+
+it("does not restore or write a guest workspace and rejects mismatched ownership", async () => {
+  mocks.get.mockClear();
+  mocks.set.mockClear();
+  expect(await readWorkspace(null)).toBeNull();
+  await writeWorkspace(
+    { version: 1, activeTabId: "guest", tabs: [{ id: "guest", path: "private.pdf" }] },
+    null,
+  );
+  expect(mocks.get).not.toHaveBeenCalled();
+  expect(mocks.set).not.toHaveBeenCalled();
+  mocks.get.mockResolvedValue({
+    owner: "owner-a",
+    workspace: { version: 1, activeTabId: "a", tabs: [{ id: "a", path: "private.pdf" }] },
+  });
+  expect(await readWorkspace("owner-b")).toBeNull();
+  expect(mocks.get).toHaveBeenLastCalledWith("workspace:owner-b");
 });

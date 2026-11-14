@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { FileText, Search, Star, Trash2, RefreshCw } from "lucide-react";
 import { useAuthStore } from "@/features/auth/model/auth-store";
 import { useFileStore } from "@/features/file-input/model/file-store";
@@ -11,6 +11,7 @@ import { getDocuments, libraryRequest, type LibraryDocument } from "../lib/api";
 import { LibrarySignIn } from "./LibrarySignIn";
 import { useDocumentStatus } from "../model/document-status";
 import { userErrorMessage } from "@/shared/lib/errors";
+import { invalidateLibrary } from "../lib/query-cache";
 
 function size(bytes: number) {
   return bytes < 1024 * 1024
@@ -39,6 +40,16 @@ function DocumentLibraryContent({ owner }: { owner?: string }) {
   const [error, setError] = useState<string | null>(null);
   const [revision, setRevision] = useState(0);
   const [working, setWorking] = useState<string | null>(null);
+  const previousToken = useRef(accessToken);
+  useEffect(() => {
+    if (previousToken.current !== accessToken && error) setRevision((value) => value + 1);
+    previousToken.current = accessToken;
+  }, [accessToken, error]);
+  const refresh = () => {
+    if (owner) invalidateLibrary(owner, "documents");
+    setOffset(0);
+    setRevision((value) => value + 1);
+  };
   const ready = useFileStore((s) => s.ready);
   const phase = useFileStore((s) => s.phase);
   const removeDialog = useConfirmDialog({
@@ -81,7 +92,7 @@ function DocumentLibraryContent({ owner }: { owner?: string }) {
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [owner, accessToken, search, favorites, offset, revision, syncRevision]);
+  }, [owner, search, favorites, offset, revision, syncRevision]);
 
   async function toggleFavorite(document: LibraryDocument) {
     setWorking(document.id);
@@ -150,10 +161,7 @@ function DocumentLibraryContent({ owner }: { owner?: string }) {
               icon={RefreshCw}
               label="문서함 새로고침"
               disabled={loading || !!working}
-              onClick={() => {
-                setOffset(0);
-                setRevision((v) => v + 1);
-              }}
+              onClick={refresh}
             />
           </div>
         )}
@@ -184,15 +192,7 @@ function DocumentLibraryContent({ owner }: { owner?: string }) {
               className="mt-3 flex items-center justify-between gap-2 text-xs text-stone-600"
             >
               <span>{error ?? syncError}</span>
-              <Button
-                size="sm"
-                variant="ghost"
-                disabled={loading}
-                onClick={() => {
-                  setOffset(0);
-                  setRevision((v) => v + 1);
-                }}
-              >
+              <Button size="sm" variant="ghost" disabled={loading} onClick={refresh}>
                 다시 시도
               </Button>
             </div>

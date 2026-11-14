@@ -14,7 +14,11 @@ let storePromise: Promise<import("@tauri-apps/plugin-store").Store> | undefined;
 let writes = Promise.resolve();
 function workspaceStore() {
   return (storePromise ??= import("@tauri-apps/plugin-store")
-    .then(({ load }) => load("workspace.json", { autoSave: 150 }))
+    .then(async ({ load }) => {
+      const store = await load("workspace.json", { autoSave: 150 });
+      if (await store.delete("workspace")) await store.save();
+      return store;
+    })
     .catch((cause) => {
       storePromise = undefined;
       throw cause;
@@ -48,16 +52,20 @@ export function parseWorkspace(value: unknown): SavedWorkspace | null {
   }
   return { version: 1, tabs, activeTabId: saved.activeTabId };
 }
-export async function readWorkspace() {
+export async function readWorkspace(owner: string | null) {
   if (!isDesktop()) return null;
-  return parseWorkspace(await (await workspaceStore()).get<unknown>("workspace"));
+  const store = await workspaceStore();
+  if (!owner) return null;
+  const saved = await store.get<{ owner: string; workspace: unknown }>(`workspace:${owner}`);
+  return saved?.owner === owner ? parseWorkspace(saved.workspace) : null;
 }
-export function writeWorkspace(workspace: SavedWorkspace) {
-  if (!isDesktop()) return Promise.resolve();
+export function writeWorkspace(workspace: SavedWorkspace, owner: string | null) {
+  if (!isDesktop() || !owner) return Promise.resolve();
   const write = writes
     .catch(() => {})
     .then(async () => {
-      await (await workspaceStore()).set("workspace", workspace);
+      const store = await workspaceStore();
+      await store.set(`workspace:${owner}`, { owner, workspace });
     });
   writes = write;
   return write;

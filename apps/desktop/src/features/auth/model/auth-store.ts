@@ -4,6 +4,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { openUrl } from "@tauri-apps/plugin-opener";
 import { isDesktop } from "@/shared/desktop/files";
 import { authConfig, setExchangeSignal, supabase } from "@/features/auth/lib/client";
+import { approveAppExit } from "@/shared/desktop/app-exit";
 
 interface AuthState {
   session: Session | null;
@@ -30,6 +31,48 @@ let attempt = 0;
 let storageWrites = Promise.resolve();
 let exchangeController: AbortController | null = null;
 let authSubscription: { unsubscribe: () => void } | undefined;
+let approvedOwner: string | null | undefined;
+let identityRequest = 0;
+
+async function approveIdentityChange() {
+  try {
+    if (!(await approveAppExit())) return false;
+    approvedOwner = useAuthStore.getState().session?.user.id ?? null;
+    return true;
+  } catch {
+    useAuthStore.setState({ error: "문서 작업을 마친 뒤 계정을 변경해 주세요." });
+    return false;
+  }
+}
+
+async function acceptSession(session: Session | null) {
+  const state = useAuthStore.getState();
+  const previous = state.session?.user.id ?? null;
+  const next = session?.user.id ?? null;
+  const managesBusy = previous !== next && state.ready && !state.busy;
+  if (managesBusy) useAuthStore.setState({ busy: true });
+  try {
+    if (previous !== next) {
+      const request = ++identityRequest;
+      if (state.ready && approvedOwner !== previous && !(await approveIdentityChange())) {
+        useAuthStore.setState({ error: "작업을 저장한 뒤 계정을 다시 변경해 주세요." });
+        return false;
+      }
+      if (
+        request !== identityRequest ||
+        (useAuthStore.getState().session?.user.id ?? null) !== previous
+      )
+        return false;
+    }
+    useAuthStore.setState({ session });
+    return true;
+  } finally {
+    if (managesBusy) {
+      approvedOwner = undefined;
+      useAuthStore.setState({ busy: false });
+    }
+  }
+}
 
 import.meta.hot?.dispose?.(() => authSubscription?.unsubscribe());
 
@@ -58,9 +101,17 @@ export function initializeAuth() {
   return (initialization ??= (async () => {
     if (!supabase || !authConfig) return;
     const listener = supabase.auth.onAuthStateChange((event, session) => {
-      useAuthStore.setState({ session });
-      // Do not clear the OS credential when the in-memory SDK initially starts empty.
-      if (event !== "INITIAL_SESSION") void persistRefreshToken(session?.refresh_token ?? null);
+      if (event === "INITIAL_SESSION" && useAuthStore.getState().ready) return;
+      if (
+        event === "TOKEN_REFRESHED" &&
+        useAuthStore.getState().ready &&
+        session?.user.id !== useAuthStore.getState().session?.user.id
+      )
+        return;
+      void acceptSession(session).then((accepted) => {
+        if (accepted && event !== "INITIAL_SESSION")
+          void persistRefreshToken(session?.refresh_token ?? null);
+      });
     });
     authSubscription = listener.data.subscription;
     try {
@@ -68,7 +119,7 @@ export function initializeAuth() {
         const current = await supabase.auth.getSession();
         if (current.error) throw current.error;
         if (current.data.session) {
-          useAuthStore.setState({ session: current.data.session });
+          await acceptSession(current.data.session);
           return;
         }
         const refreshToken = await invoke<string | null>("read_auth_refresh_token", {
@@ -83,12 +134,12 @@ export function initializeAuth() {
             useAuthStore.setState({
               error: "로그인을 복원하지 못했습니다. 연결을 확인하거나 다시 로그인해 주세요.",
             });
-          } else useAuthStore.setState({ session: data.session });
+          } else await acceptSession(data.session);
         }
       } else {
         const { data, error } = await supabase.auth.getSession();
         if (error) throw error;
-        useAuthStore.setState({ session: data.session });
+        await acceptSession(data.session);
       }
     } catch {
       useAuthStore.setState({
@@ -112,6 +163,11 @@ export async function signInWithGoogle() {
   useAuthStore.setState({ busy: true, signingIn: true, error: null });
   void supabase.auth.startAutoRefresh();
   try {
+    if (!(await approveIdentityChange())) return;
+    if (current !== attempt) {
+      if (!useAuthStore.getState().signingIn) approvedOwner = undefined;
+      return;
+    }
     if (!isDesktop()) {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
@@ -154,7 +210,7 @@ export async function signInWithGoogle() {
     const exchanged = await supabase.auth.exchangeCodeForSession(result.code);
     if (exchanged.error || !exchanged.data.session)
       throw exchanged.error ?? new Error("Missing session");
-    if (current === attempt) useAuthStore.setState({ session: exchanged.data.session });
+    if (current === attempt) await acceptSession(exchanged.data.session);
   } catch {
     if (current === attempt)
       useAuthStore.setState({
@@ -165,6 +221,7 @@ export async function signInWithGoogle() {
     if (challengeId) await invoke("cancel_google_login", { id: challengeId }).catch(() => {});
     if (nativeLogin?.id === challengeId) nativeLogin = null;
     if (current === attempt) {
+      approvedOwner = undefined;
       nativeLogin = null;
       exchangeController = null;
       setExchangeSignal();
@@ -176,6 +233,8 @@ export async function signInWithGoogle() {
 export async function cancelGoogleLogin() {
   if (!useAuthStore.getState().signingIn) return;
   ++attempt;
+  ++identityRequest;
+  approvedOwner = undefined;
   exchangeController?.abort();
   exchangeController = null;
   setExchangeSignal();
@@ -187,16 +246,23 @@ export async function cancelGoogleLogin() {
 
 export async function signOut() {
   if (!supabase || useAuthStore.getState().busy) return;
-  await cancelGoogleLogin();
   useAuthStore.setState({ busy: true, error: null });
+  let approved = false;
   try {
-    await supabase.auth.signOut({ scope: "local" });
-  } catch {
-    /* Local state and OS credentials are still removed below. */
+    approved = await approveIdentityChange();
+    if (!approved) return;
+    try {
+      await supabase.auth.signOut({ scope: "local" });
+    } catch {
+      /* Local state and OS credentials are still removed below. */
+    }
   } finally {
-    void supabase.auth.stopAutoRefresh();
-    useAuthStore.setState({ session: null });
-    await persistRefreshToken(null);
+    if (approved) {
+      void supabase.auth.stopAutoRefresh();
+      await acceptSession(null);
+      await persistRefreshToken(null);
+    }
     useAuthStore.setState({ busy: false });
+    approvedOwner = undefined;
   }
 }

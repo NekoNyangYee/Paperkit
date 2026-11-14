@@ -2,6 +2,7 @@ import { beforeEach, expect, it, vi } from "vitest";
 const mocks = vi.hoisted(() => ({
   invoke: vi.fn(),
   openUrl: vi.fn(),
+  approve: vi.fn(),
   auth: {
     onAuthStateChange: vi.fn(),
     refreshSession: vi.fn(),
@@ -15,6 +16,7 @@ const mocks = vi.hoisted(() => ({
 }));
 vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
 vi.mock("@tauri-apps/plugin-opener", () => ({ openUrl: mocks.openUrl }));
+vi.mock("@/shared/desktop/app-exit", () => ({ approveAppExit: mocks.approve }));
 vi.mock("@/shared/desktop/files", () => ({ isDesktop: () => true }));
 vi.mock("@/features/auth/lib/client", () => ({
   authConfig: { project: "https://project.supabase.co", key: "sb_publishable_test" },
@@ -29,6 +31,7 @@ const session = {
 beforeEach(() => {
   vi.resetModules();
   vi.clearAllMocks();
+  mocks.approve.mockReset().mockResolvedValue(true);
   mocks.invoke.mockResolvedValue(null);
   mocks.openUrl.mockResolvedValue(undefined);
   mocks.auth.signInWithOAuth.mockResolvedValue({
@@ -146,4 +149,55 @@ it("reuses an existing SDK session during a development restore instead of rotat
   expect(mocks.auth.refreshSession).not.toHaveBeenCalled();
   expect(mocks.invoke).not.toHaveBeenCalledWith("read_auth_refresh_token", expect.anything());
   expect(mocks.auth.startAutoRefresh).toHaveBeenCalled();
+});
+
+it("keeps the account and credentials if the user cancels the unsaved-work guard on logout", async () => {
+  const store = await import("./auth-store");
+  store.useAuthStore.setState({ ready: true, session: session as never });
+  mocks.approve.mockResolvedValueOnce(false);
+  await store.signOut();
+  expect(store.useAuthStore.getState().session).toEqual(session);
+  expect(store.useAuthStore.getState().busy).toBe(false);
+  expect(mocks.auth.signOut).not.toHaveBeenCalled();
+  expect(mocks.invoke).not.toHaveBeenCalled();
+});
+
+it("does not begin login if the guest cancels the unsaved-work guard", async () => {
+  const store = await import("./auth-store");
+  mocks.approve.mockResolvedValueOnce(false);
+  await store.signInWithGoogle();
+  expect(mocks.auth.signInWithOAuth).not.toHaveBeenCalled();
+  expect(mocks.invoke).not.toHaveBeenCalled();
+  expect(store.useAuthStore.getState().busy).toBe(false);
+});
+
+it("freezes editing while logout is waiting for the unsaved-work guard", async () => {
+  const store = await import("./auth-store");
+  store.useAuthStore.setState({ ready: true, session: session as never });
+  let finish!: (approved: boolean) => void;
+  mocks.approve.mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  const pending = store.signOut();
+  expect(store.useAuthStore.getState().busy).toBe(true);
+  finish(false);
+  await pending;
+  expect(store.useAuthStore.getState().busy).toBe(false);
+  expect(store.useAuthStore.getState().session).toEqual(session);
+});
+
+it("rotates the current account's token without guarding and ignores another account's refresh event", async () => {
+  const store = await import("./auth-store");
+  mocks.auth.getSession.mockResolvedValue({ data: { session }, error: null });
+  await store.initializeAuth();
+  const changed = mocks.auth.onAuthStateChange.mock.calls.at(-1)![0];
+  changed("TOKEN_REFRESHED", { ...session, access_token: "rotated" });
+  await vi.waitFor(() =>
+    expect(store.useAuthStore.getState().session?.access_token).toBe("rotated"),
+  );
+  changed("TOKEN_REFRESHED", { ...session, user: { id: "another-user" } });
+  expect(store.useAuthStore.getState().session?.user.id).toBe(session.user.id);
+  expect(mocks.approve).not.toHaveBeenCalled();
 });

@@ -5,7 +5,7 @@ vi.mock("@/shared/desktop/files", () => ({
   errorMessage: (cause: unknown) => String(cause),
   synchronizeSelection: async () => ({ revision: 1, file: null, error: null }),
   inspectFile: mocks.inspect,
-  clearSelection: vi.fn(),
+  clearSelection: async (revision: number) => ({ revision, file: null, error: null }),
   closeFile: vi.fn().mockResolvedValue(undefined),
 }));
 vi.mock("@/shared/desktop/workspace", () => ({
@@ -13,6 +13,7 @@ vi.mock("@/shared/desktop/workspace", () => ({
   writeWorkspace: mocks.write,
 }));
 import { registerTabCloseGuard, useFileStore } from "./file-store";
+import { useAuthStore } from "@/features/auth/model/auth-store";
 const file = (path: string, revision: number) => ({
   id: `file-${revision}`,
   path,
@@ -21,6 +22,7 @@ const file = (path: string, revision: number) => ({
 });
 beforeEach(() => {
   useFileStore.setState(useFileStore.getInitialState());
+  useAuthStore.setState({ ready: true, session: { user: { id: "owner-a" } } as never });
   mocks.read.mockReset().mockResolvedValue(null);
   mocks.write.mockReset().mockResolvedValue(undefined);
   mocks.inspect.mockReset().mockImplementation(async ([path], revision) => ({
@@ -55,6 +57,7 @@ it("keeps independent documents and views, and focuses an already-open file", as
         expect.objectContaining({ path: "b.pdf" }),
       ],
     }),
+    "owner-a",
   );
 });
 it("preserves a cancelled dirty tab and always leaves an empty tab after the last close", async () => {
@@ -104,7 +107,7 @@ it("restores tab order, active tab and views through fresh native validation, sk
   expect(useFileStore.getState().file?.path).toBe("b.pdf");
   expect(useFileStore.getState().tabs[1].view).toEqual(view);
   expect(useFileStore.getState().persistenceError).toContain("missing.pdf");
-  expect(mocks.inspect.mock.calls.map((call) => call[1])).toEqual([2, 3, 4]);
+  expect(mocks.inspect.mock.calls.map((call) => call[1])).toEqual([3, 4, 5]);
   expect(mocks.write).not.toHaveBeenCalled();
 });
 it("retains the active tab when a native open error refers to a different last selection", async () => {
@@ -129,4 +132,89 @@ it("continues opening files after a persistence failure and reports the failed w
   await useFileStore.getState().receive(["a.pdf"]);
   expect(useFileStore.getState().file?.path).toBe("a.pdf");
   expect(useFileStore.getState().persistenceError).toContain("저장하지 못했습니다");
+});
+
+it("keeps guest files only in memory and ignores all saved tabs on a guest startup", async () => {
+  useAuthStore.setState({ ready: true, session: null });
+  mocks.read.mockResolvedValue({
+    version: 1,
+    activeTabId: "old",
+    tabs: [{ id: "old", path: "another-account.pdf" }],
+  });
+  await useFileStore.getState().initialize();
+  expect(mocks.read).toHaveBeenCalledWith(null);
+  expect(mocks.inspect).not.toHaveBeenCalled();
+  await useFileStore.getState().receive(["guest.pdf"]);
+  const tab = useFileStore.getState().tabs[0];
+  useFileStore.getState().updateView(tab.file!.id, { pageIndex: 2, zoom: 120, sidebarOpen: true });
+  expect(useFileStore.getState().file?.path).toBe("guest.pdf");
+  expect(mocks.write).not.toHaveBeenCalled();
+});
+
+it("switches to only the new account's stored tabs and starts an empty guest session on logout", async () => {
+  mocks.read.mockImplementation(async (owner) => ({
+    version: 1,
+    activeTabId: owner,
+    tabs: [{ id: owner, path: `${owner}.pdf` }],
+  }));
+  await useFileStore.getState().initialize();
+  expect(useFileStore.getState().file?.path).toBe("owner-a.pdf");
+  useAuthStore.setState({ session: { user: { id: "owner-b" } } as never });
+  expect(useFileStore.getState().file).toBeNull();
+  await vi.waitFor(() => expect(useFileStore.getState().ready).toBe(true));
+  expect(useFileStore.getState().scopeOwner).toBe("owner-b");
+  expect(useFileStore.getState().tabs.map((tab) => tab.file?.path)).toEqual(["owner-b.pdf"]);
+  expect(mocks.read).toHaveBeenLastCalledWith("owner-b");
+  useAuthStore.setState({ session: null });
+  await vi.waitFor(() => expect(useFileStore.getState().ready).toBe(true));
+  expect(useFileStore.getState().file).toBeNull();
+  expect(useFileStore.getState().tabs).toHaveLength(1);
+  expect(mocks.write).not.toHaveBeenCalled();
+});
+
+it("cannot apply an old file-open completion after switching account", async () => {
+  await useFileStore.getState().initialize();
+  let resolve!: (result: unknown) => void;
+  mocks.inspect.mockImplementationOnce(
+    () =>
+      new Promise((done) => {
+        resolve = done;
+      }),
+  );
+  const opening = useFileStore.getState().receive(["private-a.pdf"]);
+  useAuthStore.setState({ session: { user: { id: "owner-b" } } as never });
+  await vi.waitFor(() => expect(useFileStore.getState().ready).toBe(true));
+  resolve({ revision: 2, file: file("private-a.pdf", 2), error: null });
+  await opening;
+  expect(useFileStore.getState().scopeOwner).toBe("owner-b");
+  expect(useFileStore.getState().file).toBeNull();
+  expect(mocks.write).not.toHaveBeenCalled();
+});
+
+it("waits for restored authentication before reading any account's saved tabs", async () => {
+  useAuthStore.setState({ ready: false, session: null });
+  const pending = useFileStore.getState().initialize();
+  expect(mocks.read).not.toHaveBeenCalled();
+  useAuthStore.setState({ ready: true, session: { user: { id: "restored-owner" } } as never });
+  await pending;
+  expect(mocks.read).toHaveBeenCalledExactlyOnceWith("restored-owner");
+  expect(useFileStore.getState().scopeOwner).toBe("restored-owner");
+});
+
+it("discards a delayed account restore when another account becomes active", async () => {
+  let finish!: (value: unknown) => void;
+  mocks.read.mockReturnValueOnce(
+    new Promise((resolve) => {
+      finish = resolve;
+    }),
+  );
+  const pending = useFileStore.getState().initialize();
+  await vi.waitFor(() => expect(mocks.read).toHaveBeenCalledWith("owner-a"));
+  useAuthStore.setState({ session: { user: { id: "owner-b" } } as never });
+  await vi.waitFor(() => expect(useFileStore.getState().ready).toBe(true));
+  finish({ version: 1, activeTabId: "a", tabs: [{ id: "a", path: "private-a.pdf" }] });
+  await pending;
+  expect(mocks.inspect).not.toHaveBeenCalled();
+  expect(useFileStore.getState().scopeOwner).toBe("owner-b");
+  expect(useFileStore.getState().file).toBeNull();
 });
