@@ -7,6 +7,7 @@ pub(crate) mod graphics;
 mod history;
 pub(crate) mod movement;
 mod replace;
+pub(crate) use replace::replace as replace_text_object;
 mod stamps;
 pub(crate) mod verification;
 pub use action::{EditAction, EditState, WatermarkSettings};

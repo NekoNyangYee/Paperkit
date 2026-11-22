@@ -15,12 +15,12 @@
 
 ## 역할과 처리 경로
 
-| 도구                            | 역할                                                        | 실행 시점                                                |
-| ------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------- |
-| PDFium                          | 렌더링·객체/페이지 작업·전체 텍스트 추출·후보 재열기        | 기본 경로                                                |
-| lopdf                           | 콘텐츠 스트림·리소스 보존 편집·복구 후보의 페이지 구조 확인 | 해당 편집과 복구 검증                                    |
-| qpdf 12.4.2                     | 구조 검사·손상 문서 복구 후보                               | 편집 반영·저장 전 검사, 처음 열기 실패 시 복구           |
-| Tesseract.js 7 / 한글·영문 모델 | 페이지 이미지의 문자 인식                                   | 글자가 없는 페이지, 사용자가 이미지 재인식을 선택한 경우 |
+| 도구                                      | 역할                                                        | 실행 시점                                                |
+| ----------------------------------------- | ----------------------------------------------------------- | -------------------------------------------------------- |
+| PDFium                                    | 렌더링·객체/페이지 작업·전체 텍스트 추출·후보 재열기        | 기본 경로                                                |
+| lopdf                                     | 콘텐츠 스트림·리소스 보존 편집·복구 후보의 페이지 구조 확인 | 해당 편집과 복구 검증                                    |
+| qpdf 12.4.2                               | 구조 검사·손상 문서 복구 후보                               | 편집 반영·저장 전 검사, 처음 열기 실패 시 복구           |
+| 네이티브 Tesseract 5.5.0 / 한글·영문 모델 | 페이지 이미지의 문자 인식                                   | 글자가 없는 페이지, 사용자가 이미지 재인식을 선택한 경우 |
 
 `engine/ensemble.rs`가 qpdf와 네이티브 열기를 조율한다. `History::apply`는 후보를 PDFium으로 다시 연 뒤 qpdf 검사까지 통과해야 revision과 Undo/Redo에 한 번 반영한다. 실패하면 문서와 이력을 유지한다. Save도 교차 검사 후 기존 원자적 새 파일 저장 경로를 사용한다.
 
@@ -51,7 +51,7 @@ flowchart LR
 
 `Paperframe::extract_text` / Tauri `extract_page_text`는 파일·revision·페이지와 추출 권한을 확인한다. 전체 페이지 텍스트가 유효하면 OCR을 실행하지 않는다. 텍스트가 없거나 깨진 문자 비율이 높은 경우 최대 1,600 × 2,200 px PNG를 넘긴다. 일부 글자만 있는 혼합 페이지는 **이미지에서 다시 읽기**로 OCR을 선택할 수 있다.
 
-`lib/ensemble/read-page.ts`가 네이티브 결과와 OCR을 연결한다. worker·WASM·모델은 앱에 포함하며 CDN을 사용하지 않는다. 결과를 서버로 전송하지 않는다. 요청 시 시작, 90초 제한, 취소·늦은 결과 무시, 인식 후 worker 종료를 적용한다. 생성 중인 worker는 생성 완료 후 취소 여부를 확인해 정리한다. 실패 시 같은 페이지의 앞선 결과는 남기며 다른 페이지·revision의 결과는 재사용하지 않는다.
+Tauri의 `commands/reading.rs`가 PDFium 추출과 `pdf_core::ocr`를 연결한다. Rust는 번들한 Windows Tesseract에 파이프로 이미지를 전달하고 인식 결과와 신뢰도를 읽는다. 재인식까지 합쳐 90초를 허용하며, 취소 또는 시간 초과 시 프로세스를 종료한다. 프런트는 요청·취소와 진행 표시를 담당하고 최종 텍스트를 받는다.
 
 OCR은 확률적이다. 한글 본문·영문 fixture는 일치했지만 32 pt 한글 제목에서 `한`을 `안`으로 읽는 사례도 확인했다. 모델 교체만으로 이 사례가 해결되지는 않았다. confidence를 정답 확률이나 정확도 보증으로 표시하지 않으며 UI는 결과 확인을 안내한다.
 
@@ -67,7 +67,7 @@ OCR은 확률적이다. 한글 본문·영문 fixture는 일치했지만 32 pt �
 
 브라우저 편집 화면은 원본 행의 위치 보정이 끝나기 전에 자동 줄바꿈하지 않는다. 첫 입력부터 원본 x 보정을 해제해 자연스럽게 줄바꿈한다. 줌은 PDF 재렌더 없이 크기와 transform만 갱신하고 휠 이벤트는 프레임 단위로 합치며 텍스트/객체 뷰를 재사용한다. 공개된 렌더 객체와 수정 이력은 줌에서 갱신하지 않는다.
 
-`pnpm setup:engines`는 공식 qpdf 포터블 배포와 고정 commit의 한글·영문 모델을 SHA-256 확인 후 준비한다. 버전·출처·해시는 `scripts/ensemble-manifest.json`과 pnpm lock에 고정한다. 생성 파일은 git에 넣지 않는다. qpdf는 Tauri resource, OCR은 Vite public asset으로 배포한다. CI의 setup-node/setup-native와 웹 build에 준비 단계를 연결했다.
+`pnpm setup:engines`는 qpdf, TesseractOCR NuGet 패키지의 Windows x64 실행 파일과 DLL, 한글·영문 모델의 SHA-256을 확인한다. 출처와 해시는 `scripts/ensemble-manifest.json`에 고정한다. 네이티브 빌드에서 이 파일들을 Tauri 리소스로 배포한다.
 
 ```powershell
 pnpm setup:pdfium
@@ -88,4 +88,4 @@ $env:PAPERKIT_EDIT_REGRESSION_PDF = 'C:\문서\sample.pdf'
 cargo test -p pdf-core --locked --test editing_regressions -- --ignored --nocapture
 ```
 
-참고: [qpdf CLI와 종료 코드](https://qpdf.readthedocs.io/en/stable/cli.html), [Tesseract.js 로컬 실행](https://github.com/naptha/tesseract.js/blob/master/docs/local-installation.md), [공식 OCR 모델](https://github.com/tesseract-ocr/tessdata_fast).
+참고: [qpdf CLI와 종료 코드](https://qpdf.readthedocs.io/en/stable/cli.html), [Tesseract CLI](https://tesseract-ocr.github.io/tessdoc/Command-Line-Usage.html), [공식 OCR 모델](https://github.com/tesseract-ocr/tessdata_fast).

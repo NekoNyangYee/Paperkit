@@ -1,7 +1,7 @@
+import { openBrowserPopup } from "../lib/browser-popup";
 import { create } from "zustand";
 import type { Session } from "@supabase/supabase-js";
 import { invoke } from "@tauri-apps/api/core";
-import { openUrl } from "@tauri-apps/plugin-opener";
 import { isDesktop } from "@/shared/desktop/files";
 import { authConfig, setExchangeSignal, supabase } from "@/features/auth/lib/client";
 import { approveAppExit } from "@/shared/desktop/app-exit";
@@ -27,6 +27,7 @@ export const useAuthStore = create<AuthState>((set) => ({
 
 let initialization: Promise<void> | undefined;
 let nativeLogin: { id: string; redirectUrl: string } | null = null;
+let webLogin: ReturnType<typeof openBrowserPopup> | null = null;
 let attempt = 0;
 let storageWrites = Promise.resolve();
 let exchangeController: AbortController | null = null;
@@ -160,33 +161,30 @@ export async function signInWithGoogle() {
   }
   const current = ++attempt;
   let challengeId: string | null = null;
+  let accepted = false;
+  let popup: typeof webLogin = null;
   useAuthStore.setState({ busy: true, signingIn: true, error: null });
   void supabase.auth.startAutoRefresh();
   try {
+    if (!isDesktop()) {
+      popup = openBrowserPopup();
+      webLogin = popup;
+    }
     if (!(await approveIdentityChange())) return;
     if (current !== attempt) {
       if (!useAuthStore.getState().signingIn) approvedOwner = undefined;
       return;
     }
-    if (!isDesktop()) {
-      const { error } = await supabase.auth.signInWithOAuth({
-        provider: "google",
-        options: {
-          redirectTo: `${window.location.origin}/`,
-          queryParams: { prompt: "select_account" },
-        },
-      });
-      if (error) throw error;
-      return;
-    }
-    const challenge = await invoke<{ id: string; redirectUrl: string }>("begin_google_login");
-    challengeId = challenge.id;
+    const challenge = popup
+      ? null
+      : await invoke<{ id: string; redirectUrl: string }>("begin_google_login");
+    challengeId = challenge?.id ?? null;
     if (current !== attempt) return;
     nativeLogin = challenge;
     const { data, error } = await supabase.auth.signInWithOAuth({
       provider: "google",
       options: {
-        redirectTo: challenge.redirectUrl,
+        redirectTo: popup?.redirectUrl ?? challenge!.redirectUrl,
         skipBrowserRedirect: true,
         queryParams: { prompt: "select_account" },
       },
@@ -196,29 +194,39 @@ export async function signInWithGoogle() {
     const authorize = new URL(data.url);
     if (authorize.origin !== authConfig.project || authorize.pathname !== "/auth/v1/authorize")
       throw new Error("Unexpected login URL");
-    const callback = invoke<string>("finish_google_login", { id: challenge.id }).then(
-      (code) => ({ code, error: null }),
-      (error: unknown) => ({ code: null, error }),
-    );
-    await openUrl(data.url);
-    const result = await callback;
+    const code = popup
+      ? await popup.authorize(authorize.href)
+      : await invoke<string>("finish_google_login", {
+          id: challenge!.id,
+          authorizeUrl: authorize.href,
+        });
     if (current !== attempt) return;
-    if (result.error || !result.code) throw result.error ?? new Error("Missing code");
+    if (!code) throw new Error("Missing code");
     const controller = new AbortController();
     exchangeController = controller;
     setExchangeSignal(controller.signal);
-    const exchanged = await supabase.auth.exchangeCodeForSession(result.code);
+    const exchanged = await supabase.auth.exchangeCodeForSession(code);
     if (exchanged.error || !exchanged.data.session)
       throw exchanged.error ?? new Error("Missing session");
-    if (current === attempt) await acceptSession(exchanged.data.session);
-  } catch {
+    if (current === attempt) accepted = await acceptSession(exchanged.data.session);
+  } catch (cause) {
     if (current === attempt)
       useAuthStore.setState({
         error:
-          "Google 로그인을 완료하지 못했습니다. 브라우저에서 로그인을 마친 뒤 다시 시도해 주세요.",
+          cause instanceof Error && cause.message === "popup_blocked"
+            ? "로그인하려면 브라우저의 팝업을 허용해 주세요."
+            : cause === "login_cancelled"
+              ? null
+              : cause === "로그인 창을 열려면 Chrome 또는 Microsoft Edge가 필요합니다."
+                ? cause
+                : "Google 로그인을 완료하지 못했습니다. 다시 시도해 주세요.",
       });
   } finally {
-    if (challengeId) await invoke("cancel_google_login", { id: challengeId }).catch(() => {});
+    popup?.close();
+    if (webLogin === popup) webLogin = null;
+    if (challengeId) {
+      await invoke("complete_google_login", { id: challengeId, success: accepted }).catch(() => {});
+    }
     if (nativeLogin?.id === challengeId) nativeLogin = null;
     if (current === attempt) {
       approvedOwner = undefined;
@@ -238,6 +246,8 @@ export async function cancelGoogleLogin() {
   exchangeController?.abort();
   exchangeController = null;
   setExchangeSignal();
+  webLogin?.close();
+  webLogin = null;
   const pending = nativeLogin;
   nativeLogin = null;
   useAuthStore.setState({ busy: false, signingIn: false, error: null });

@@ -18,8 +18,9 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     pids_limit: 128
-    mem_limit: 768m
-    cpus: 2.0
+    mem_limit: ${PAPERKIT_API_MEMORY:-416m}
+    memswap_limit: ${PAPERKIT_API_MEMORY:-416m}
+    cpus: ${PAPERKIT_API_CPUS:-0.20}
     stop_grace_period: 40s
     volumes:
       - database:/data
@@ -52,7 +53,9 @@ services:
     cap_drop: [ALL]
     security_opt: [no-new-privileges:true]
     pids_limit: 64
-    mem_limit: 128m
+    mem_limit: ${PAPERKIT_PROXY_MEMORY:-96m}
+    memswap_limit: ${PAPERKIT_PROXY_MEMORY:-96m}
+    cpus: ${PAPERKIT_PROXY_CPUS:-0.05}
     tmpfs:
       - /tmp:size=16m,mode=1777,noexec,nosuid
     networks: [edge, storage]

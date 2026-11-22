@@ -35,7 +35,7 @@ export const errorFallbacks: Record<ErrorContext, string> = {
   remove: "문서를 목록에서 지우지 못했어요. 잠시 후 다시 시도해 주세요.",
   toolSave: "도구를 보관하지 못했어요. 입력한 내용을 확인한 뒤 다시 시도해 주세요.",
   toolRemove: "도구를 지우지 못했어요. 잠시 후 다시 시도해 주세요.",
-  clipboard: "복사한 내용을 가져오지 못했어요. 다시 복사하거나 이미지 삽입을 이용해 주세요.",
+  clipboard: "클립보드를 사용하지 못했어요. 다시 복사한 뒤 붙여넣어 주세요.",
   signature: "서명을 넣지 못했어요. 그린 서명을 확인한 뒤 다시 눌러 주세요.",
   watermark: "워터마크를 적용하지 못했어요. 설정을 확인한 뒤 다시 눌러 주세요.",
   extract: "페이지 글자를 읽지 못했어요. 잠시 후 다시 시도해 주세요.",
@@ -60,6 +60,15 @@ export function errorDetail(cause: unknown): string {
 export function userErrorMessage(cause: unknown, context: ErrorContext = "general"): string {
   if (cause instanceof UserFacingError) return cause.message;
   const detail = errorDetail(cause);
+  if (detail === "ocrUnavailable")
+    return "로컬 문자 인식 엔진을 시작하지 못했어요. 앱 설치 상태를 확인해 주세요.";
+  if (detail === "ocrTimeout") return "페이지 인식 시간이 초과됐어요. 다시 시도해 주세요.";
+  if (detail === "ocrCancelled") return "글자 읽기를 취소했어요.";
+  if (detail === "maskPermissions") return "이 PDF의 권한 설정으로 마스킹 사본을 만들 수 없어요.";
+  if (detail === "maskSize") return "이미지로 변환한 사본이 저장 한도인 128 MB를 초과했어요.";
+  if (detail === "maskVerification") return "마스킹 결과를 검증하지 못해 사본을 저장하지 않았어요.";
+  if (detail === "maskRevision")
+    return "문서가 변경됐어요. 마스킹 창을 다시 열어 영역을 확인해 주세요.";
   const code = cause && typeof cause === "object" && "code" in cause ? cause.code : undefined;
   if (code === "fileCount" || /PDF 한 개만/.test(detail)) return "PDF를 한 개씩 선택해 주세요.";
   if (code === "notFound" || /파일을 찾을 수 없|파일이 이동/.test(detail))

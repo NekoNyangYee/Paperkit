@@ -5,6 +5,8 @@ import { isSortable, useSortable } from "@dnd-kit/react/sortable";
 import { KeyboardSensor, PointerSensor, PointerActivationConstraints } from "@dnd-kit/dom";
 import { RestrictToElement } from "@dnd-kit/dom/modifiers";
 import { useFileStore, type WorkspaceTab } from "@/features/file-input/model/file-store";
+import { LoginRequiredDialog } from "@/features/auth/components/LoginRequiredDialog";
+import { TabContextMenu } from "./TabContextMenu";
 
 const sensors = [
   PointerSensor.configure({
@@ -40,85 +42,99 @@ function SortableTab({
     void closeTab(tab.id).catch(reportError);
   };
   return (
-    <div
-      ref={ref}
-      data-workspace-tab={tab.id}
-      onAuxClick={(event) => {
-        if (event.button === 1) {
-          event.preventDefault();
-          close();
-        }
-      }}
-      className={`@container relative flex h-full min-w-0 flex-1 items-center overflow-hidden border-r border-stone-200 ${active ? "bg-white text-stone-900" : "bg-stone-100 text-stone-500 hover:bg-stone-200/60"} ${isDragging ? "z-10 shadow-md" : ""}`}
-    >
-      <button
-        ref={handleRef}
-        type="button"
-        role="tab"
-        id={`tab-${tab.id}`}
-        aria-label={label}
-        aria-controls={`panel-${tab.id}`}
-        aria-selected={active}
-        aria-keyshortcuts="Alt+Shift+ArrowLeft Alt+Shift+ArrowRight"
-        tabIndex={active ? 0 : -1}
-        disabled={disabled}
-        title={tab.file?.path ?? label}
-        onClick={() => activateTab(tab.id)}
-        onKeyDown={(event) => {
-          if (isDragging) return;
-          const tabs = useFileStore.getState().tabs;
-          const offset = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
-          const next =
-            event.key === "Home"
-              ? 0
-              : event.key === "End"
-                ? tabs.length - 1
-                : offset
-                  ? (index + offset + tabs.length) % tabs.length
-                  : -1;
-          if (offset && event.altKey && event.shiftKey) {
-            event.preventDefault();
-            moveTab(tab.id, tabs[next].id);
-            return;
-          }
-          if (next >= 0) {
-            event.preventDefault();
-            activateTab(tabs[next].id);
-            document.getElementById(`tab-${tabs[next].id}`)?.focus();
-          }
-          if (event.key === "Delete") {
+    <TabContextMenu tabId={tab.id}>
+      <div
+        ref={ref}
+        data-workspace-tab={tab.id}
+        onAuxClick={(event) => {
+          if (event.button === 1) {
             event.preventDefault();
             close();
           }
         }}
-        className="flex h-full min-w-0 flex-1 touch-none items-center gap-2 overflow-hidden px-2 text-xs focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-emerald-700 disabled:opacity-50 @min-[120px]:px-3"
+        className={`@container relative flex h-full min-w-0 flex-1 items-center overflow-hidden border-r border-stone-200 ${active ? "bg-white text-stone-900" : "bg-stone-100 text-stone-500 hover:bg-stone-200/60"} ${isDragging ? "z-10 shadow-md" : ""}`}
       >
-        <FileText size={14} className="hidden shrink-0 @min-[120px]:block" aria-hidden="true" />
-        <span className="min-w-0 truncate">{label}</span>
-        {tab.dirty && (
-          <span
-            aria-label="저장하지 않은 변경"
-            className="size-1.5 shrink-0 rounded-full bg-emerald-700"
-          />
-        )}
-      </button>
-      <button
-        type="button"
-        aria-label={`${label} 탭 닫기`}
-        title="탭 닫기 (Ctrl+W)"
-        disabled={disabled}
-        onClick={close}
-        className="grid size-8 shrink-0 touch-manipulation place-items-center hover:bg-stone-200 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-emerald-700"
-      >
-        <X size={18} aria-hidden="true" />
-      </button>
-    </div>
+        <button
+          ref={handleRef}
+          type="button"
+          role="tab"
+          id={`tab-${tab.id}`}
+          aria-label={label}
+          aria-controls={`panel-${tab.id}`}
+          aria-selected={active}
+          aria-keyshortcuts="Alt+Shift+ArrowLeft Alt+Shift+ArrowRight"
+          tabIndex={active ? 0 : -1}
+          disabled={disabled}
+          title={tab.file?.path ?? label}
+          onClick={() => activateTab(tab.id)}
+          onKeyDown={(event) => {
+            if (isDragging) return;
+            const tabs = useFileStore.getState().tabs;
+            const offset = event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0;
+            const next =
+              event.key === "Home"
+                ? 0
+                : event.key === "End"
+                  ? tabs.length - 1
+                  : offset
+                    ? (index + offset + tabs.length) % tabs.length
+                    : -1;
+            if (offset && event.altKey && event.shiftKey) {
+              event.preventDefault();
+              moveTab(tab.id, tabs[next].id);
+              return;
+            }
+            if (next >= 0) {
+              event.preventDefault();
+              activateTab(tabs[next].id);
+              document.getElementById(`tab-${tabs[next].id}`)?.focus();
+            }
+            if (event.key === "Delete") {
+              event.preventDefault();
+              close();
+            }
+          }}
+          className="flex h-full min-w-0 flex-1 touch-none items-center gap-2 overflow-hidden px-2 text-xs focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-emerald-700 disabled:opacity-50 @min-[120px]:px-3"
+        >
+          <FileText size={14} className="hidden shrink-0 @min-[120px]:block" aria-hidden="true" />
+          <span className="min-w-0 truncate">{label}</span>
+          {tab.dirty && (
+            <span
+              aria-label="저장하지 않은 변경"
+              className="size-1.5 shrink-0 rounded-full bg-emerald-700"
+            />
+          )}
+        </button>
+        <button
+          type="button"
+          aria-label={`${label} 탭 종료`}
+          title="탭 종료"
+          disabled={disabled}
+          onClick={close}
+          className="grid size-8 shrink-0 touch-manipulation place-items-center hover:bg-stone-200 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-emerald-700"
+        >
+          <X size={18} aria-hidden="true" />
+        </button>
+      </div>
+    </TabContextMenu>
   );
 }
 
 export function WorkspaceTabs() {
-  const { tabs, activeTabId, ready, phase, newTab, activateTab, closeTab, moveTab, reportError } =
-    useFileStore();
+  const {
+    tabs,
+    activeTabId,
+    ready,
+    phase,
+    newTab,
+    activateTab,
+    closeTab,
+    moveTab,
+    reportError,
+    scopeOwner,
+    tabNotice,
+    dismissTabNotice,
+  } = useFileStore();
   const container = useRef<HTMLDivElement>(null);
   const sorting = useRef(false);
   const disabled = !ready || phase === "checking" || phase === "restoring";
@@ -128,7 +144,7 @@ export function WorkspaceTabs() {
         disabled ||
         sorting.current ||
         event.isComposing ||
-        document.querySelector('[role="dialog"], [role="alertdialog"]')
+        document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')
       )
         return;
       if (!(event.ctrlKey || event.metaKey) || event.altKey) return;
@@ -186,7 +202,7 @@ export function WorkspaceTabs() {
       <button
         type="button"
         aria-label="새 탭"
-        title="새 탭 (Ctrl+T)"
+        title={scopeOwner ? "새 탭" : "새 탭을 추가하려면 로그인해 주세요"}
         disabled={disabled}
         onClick={newTab}
         className="grid h-full w-10 shrink-0 touch-manipulation place-items-center hover:bg-stone-200 focus-visible:outline-2 focus-visible:-outline-offset-2 focus-visible:outline-emerald-700 disabled:opacity-40"
@@ -194,6 +210,14 @@ export function WorkspaceTabs() {
         <Plus size={18} />
       </button>
       <div data-tauri-drag-region className="h-full min-w-8 flex-1" />
+      {tabNotice && (
+        <LoginRequiredDialog
+          open
+          feature="새 탭 추가"
+          description={tabNotice}
+          onClose={dismissTabNotice}
+        />
+      )}
     </div>
   );
 }

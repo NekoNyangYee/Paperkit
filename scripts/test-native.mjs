@@ -1,7 +1,7 @@
 // PDFium bindings have process-global initialization; isolate native test cases.
 import { spawnSync } from "node:child_process";
 const target = process.argv[2];
-if (!["corpus_smoke", "fonts_smoke"].includes(target))
+if (!["corpus_smoke", "fonts_smoke", "stamps_smoke"].includes(target))
   throw new Error("Unknown native test target");
 const args = ["test", "-p", "pdf-core", "--locked", "--test", target];
 const listing = spawnSync("cargo", [...args, "--", "--ignored", "--list"], { encoding: "utf8" });

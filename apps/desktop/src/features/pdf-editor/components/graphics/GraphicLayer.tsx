@@ -1,14 +1,15 @@
 import { Button } from "@/shared/ui/button";
 import { useEffect, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { Copy, Trash2, X } from "lucide-react";
+import { Copy, Trash2, X, Scaling } from "lucide-react";
 import type { EditAction, PreviewPage, GraphicObject } from "@/shared/pdf/types";
 import {
   graphicBox,
   graphicTransform,
   type Box,
 } from "@/features/pdf-editor/lib/graphics/graphic-transform";
-import { IconButton } from "@/shared/ui/icon-button";
+import { ActionContextMenu, ContextMenuItem } from "@/shared/ui/context-menu";
+import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/shared/ui/dialog";
 import { MessageDialog } from "@/shared/ui/MessageDialog";
 import { SizeControls } from "@/features/pdf-editor/components/controls/SizeControls";
 import {
@@ -57,6 +58,7 @@ export function GraphicLayer({
   const pendingBox = useRef<Box | null>(null);
   const old = selected && graphicBox(selected.screenBounds);
   const box = next ?? old;
+  const [sizeOpen, setSizeOpen] = useState(false);
   const [copying, setCopying] = useState(false);
   const copyingRef = useRef(false);
   async function copySelected() {
@@ -109,7 +111,7 @@ export function GraphicLayer({
         await apply({ kind: "pasteImage", page: page.pageIndex, png });
       }
     } catch {
-      setError("붙여넣기를 마치지 못했어요. 다시 복사하거나 이미지 삽입을 이용해 주세요.");
+      setError("붙여넣기를 마치지 못했어요. 이미지를 다시 복사한 뒤 붙여넣어 주세요.");
     }
   }
   useEffect(() => {
@@ -131,10 +133,14 @@ export function GraphicLayer({
     };
     const pasteEvent = (event: ClipboardEvent) => {
       if (event.defaultPrevented || disabled || committing || isTextInput(event.target)) return;
-      const source = recalledGraphic(event.clipboardData?.getData("text/plain") ?? "");
-      const image = Array.from(event.clipboardData?.items ?? [])
-        .find((item) => item.type.startsWith("image/"))
-        ?.getAsFile();
+      if (document.querySelector('[role="dialog"], [role="alertdialog"]')) return;
+      const data = event.clipboardData;
+      const source = recalledGraphic(data?.getData("text/plain") ?? "");
+      const image =
+        Array.from(data?.items ?? [])
+          .find((item) => item.type.startsWith("image/"))
+          ?.getAsFile() ??
+        Array.from(data?.files ?? []).find((file) => file.type.startsWith("image/"));
       if (!source && !image) return;
       event.preventDefault();
       void paste(source, image);
@@ -157,7 +163,7 @@ export function GraphicLayer({
         disabled ||
         committing ||
         isTextInput(event.target) ||
-        document.querySelector('[role="dialog"], [role="alertdialog"]')
+        document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]')
       )
         return;
       if (
@@ -203,6 +209,7 @@ export function GraphicLayer({
   }, [textSelected]);
   useEffect(() => {
     setNext(null);
+    setSizeOpen(false);
     setCommitting(false);
     setError(null);
     drag.current = null;
@@ -331,171 +338,187 @@ export function GraphicLayer({
     setNext(null);
   };
   return (
-    <div
-      ref={root}
-      className="pointer-events-none absolute inset-0 z-[6]"
-      onPointerMove={move}
-      onPointerUp={end}
-      onPointerCancel={cancel}
-      onLostPointerCapture={() => {
-        if (drag.current) cancel();
-      }}
-    >
-      {transforming && (
-        <>
-          <img
-            aria-hidden
-            draggable={false}
-            src={layers!.background}
-            className="absolute inset-0"
-            width={page.width}
-            height={page.height}
-          />
-          <img
-            aria-hidden
-            draggable={false}
-            data-testid="moving-graphic"
-            src={layers!.foreground}
-            width={page.width}
-            height={page.height}
-            className="absolute inset-0"
-            style={{
-              transformOrigin: `${old!.left}px ${old!.top}px`,
-              transform: `translate(${box!.left - old!.left}px,${box!.top - old!.top}px) scale(${box!.width / old!.width},${box!.height / old!.height})`,
-            }}
-          />
-        </>
-      )}
-      <svg className="absolute inset-0" width={page.width} height={page.height}>
-        {sorted.map((o) => {
-          const r = graphicBox(o.screenBounds);
-          const interior =
-            o.kind === "image" && r.width * r.height < page.width * page.height * 0.8;
-          return (
-            <polygon
-              key={o.id}
-              role="button"
-              tabIndex={disabled || id === o.id ? -1 : 0}
-              aria-label={`${labels[o.kind]} ${o.id + 1} 선택`}
-              aria-pressed={id === o.id}
-              points={o.screenBounds.map((p) => p.join(",")).join(" ")}
-              fill="transparent"
-              stroke="transparent"
-              strokeWidth={6}
-              className="cursor-move outline-none hover:stroke-blue-400 focus-visible:stroke-blue-500"
-              visibility={id === o.id ? "hidden" : undefined}
-              style={{
-                pointerEvents:
-                  disabled || transforming ? "none" : interior || graphicMode ? "all" : "stroke",
-              }}
-              onPointerDown={(e) => start(e, false, o)}
-              onClick={(e) => {
-                e.stopPropagation();
-                if (!disabled && !committing) {
-                  choose(o);
-                }
-              }}
-              onKeyDown={(e) => {
-                if ((e.key === "Enter" || e.key === " ") && !disabled && !committing) {
-                  e.preventDefault();
-                  choose(o);
-                }
-              }}
-            />
-          );
-        })}
-      </svg>
-      {selected && box && (
-        <>
-          <div
-            role="button"
-            tabIndex={0}
-            aria-label="선택한 이미지·도형 이동"
-            className="pointer-events-auto absolute border-2 border-blue-500"
-            style={{ ...box, cursor: "move", touchAction: "none" }}
-            onPointerDown={(e) => start(e, false)}
-            onKeyDown={(e) => {
-              if (e.key === "Escape") setId(null);
-              if (e.key === "Delete" && !disabled && !committing) {
-                e.preventDefault();
-                void apply({ kind: "deleteGraphic", page: page.pageIndex, object: selected.id });
-              }
-            }}
-          >
-            <Button
-              variant="plain"
-              size="bare"
-              aria-label="이미지·도형 크기 조절"
-              className="absolute -bottom-2 -right-2 h-4 w-4 cursor-nwse-resize rounded-sm border-2 border-white bg-blue-600"
-              style={{ touchAction: "none" }}
-              onPointerDown={(e) => start(e, "both")}
-            />
-            <Button
-              variant="plain"
-              size="bare"
-              aria-label="이미지·도형 가로 조절"
-              className="absolute -right-2 top-1/2 h-4 w-3 cursor-ew-resize border border-white bg-blue-600"
-              onPointerDown={(e) => start(e, "x")}
-            />
-            <Button
-              variant="plain"
-              size="bare"
-              aria-label="이미지·도형 세로 조절"
-              className="absolute -bottom-2 left-1/2 h-3 w-4 cursor-ns-resize border border-white bg-blue-600"
-              onPointerDown={(e) => start(e, "y")}
-            />
-          </div>
-          <div
-            className="pointer-events-auto absolute z-30 flex flex-wrap items-center gap-1 rounded-md border bg-white p-1 shadow"
-            style={{
-              left: Math.max(0, Math.min(page.width - 380, box.left)),
-              top:
-                box.top + box.height + 38 < page.height
-                  ? box.top + box.height + 5
-                  : Math.max(0, box.top - 38),
-            }}
-          >
-            <SizeControls
-              key={`${selected.id}:${old?.width}:${old?.height}`}
-              label="이미지·도형"
-              width={old!.width}
-              height={old!.height}
-              disabled={disabled || committing}
-              onApply={(width, height) => {
-                const matrix = graphicTransform(selected, { ...old!, width, height });
-                if (matrix)
-                  void apply({
-                    kind: "transformGraphic",
-                    page: page.pageIndex,
-                    object: selected.id,
-                    matrix,
-                  });
-              }}
-            />
-            <IconButton
-              icon={Copy}
-              label="이미지·도형 복사"
+    <ActionContextMenu
+      label="이미지·도형 작업"
+      items={
+        selected && (
+          <>
+            <ContextMenuItem disabled={disabled || committing} onSelect={() => setSizeOpen(true)}>
+              <Scaling />
+              크기 조절…
+            </ContextMenuItem>
+            <ContextMenuItem
               disabled={disabled || committing || copying}
-              onClick={() => void copySelected()}
-            />
-            <IconButton
-              icon={Trash2}
-              label="이미지·도형 삭제"
+              onSelect={() => void copySelected()}
+            >
+              <Copy />
+              이미지·도형 복사
+            </ContextMenuItem>
+            <ContextMenuItem
+              destructive
               disabled={disabled || committing}
-              onClick={() =>
+              onSelect={() =>
                 void apply({ kind: "deleteGraphic", page: page.pageIndex, object: selected.id })
               }
+            >
+              <Trash2 />
+              이미지·도형 삭제
+            </ContextMenuItem>
+            <ContextMenuItem disabled={committing} onSelect={() => setId(null)}>
+              <X />
+              선택 해제
+            </ContextMenuItem>
+          </>
+        )
+      }
+    >
+      <div
+        ref={root}
+        className="pointer-events-none absolute inset-0 z-[6]"
+        onPointerMove={move}
+        onPointerUp={end}
+        onPointerCancel={cancel}
+        onLostPointerCapture={() => {
+          if (drag.current) cancel();
+        }}
+      >
+        {transforming && (
+          <>
+            <img
+              aria-hidden
+              draggable={false}
+              src={layers!.background}
+              className="absolute inset-0"
+              width={page.width}
+              height={page.height}
             />
-            <IconButton
-              icon={X}
-              label="이미지·도형 선택 해제"
-              disabled={committing}
-              onClick={() => setId(null)}
+            <img
+              aria-hidden
+              draggable={false}
+              data-testid="moving-graphic"
+              src={layers!.foreground}
+              width={page.width}
+              height={page.height}
+              className="absolute inset-0"
+              style={{
+                transformOrigin: `${old!.left}px ${old!.top}px`,
+                transform: `translate(${box!.left - old!.left}px,${box!.top - old!.top}px) scale(${box!.width / old!.width},${box!.height / old!.height})`,
+              }}
             />
-          </div>
-        </>
-      )}
-      <MessageDialog message={active ? error : null} onDismiss={() => setError(null)} />
-    </div>
+          </>
+        )}
+        <svg className="absolute inset-0" width={page.width} height={page.height}>
+          {sorted.map((o) => {
+            const r = graphicBox(o.screenBounds);
+            const interior =
+              o.kind === "image" && r.width * r.height < page.width * page.height * 0.8;
+            return (
+              <polygon
+                key={o.id}
+                role="button"
+                tabIndex={disabled || id === o.id ? -1 : 0}
+                aria-label={`${labels[o.kind]} ${o.id + 1} 선택`}
+                aria-pressed={id === o.id}
+                points={o.screenBounds.map((p) => p.join(",")).join(" ")}
+                fill="transparent"
+                stroke="transparent"
+                strokeWidth={6}
+                className="cursor-move outline-none hover:stroke-blue-400 focus-visible:stroke-blue-500"
+                visibility={id === o.id ? "hidden" : undefined}
+                style={{
+                  pointerEvents:
+                    disabled || transforming ? "none" : interior || graphicMode ? "all" : "stroke",
+                }}
+                onContextMenu={() => choose(o)}
+                onPointerDown={(e) => start(e, false, o)}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  if (!disabled && !committing) {
+                    choose(o);
+                  }
+                }}
+                onKeyDown={(e) => {
+                  if ((e.key === "Enter" || e.key === " ") && !disabled && !committing) {
+                    e.preventDefault();
+                    choose(o);
+                  }
+                }}
+              />
+            );
+          })}
+        </svg>
+        {selected && box && (
+          <>
+            <div
+              role="button"
+              tabIndex={0}
+              aria-label="선택한 이미지·도형 이동"
+              className="pointer-events-auto absolute border-2 border-blue-500"
+              style={{ ...box, cursor: "move", touchAction: "none" }}
+              onPointerDown={(e) => start(e, false)}
+              onKeyDown={(e) => {
+                if (e.key === "Escape") setId(null);
+                if (e.key === "Delete" && !disabled && !committing) {
+                  e.preventDefault();
+                  void apply({ kind: "deleteGraphic", page: page.pageIndex, object: selected.id });
+                }
+              }}
+            >
+              <Button
+                variant="plain"
+                size="bare"
+                aria-label="이미지·도형 크기 조절"
+                className="absolute -bottom-2 -right-2 h-4 w-4 cursor-nwse-resize rounded-sm border-2 border-white bg-blue-600"
+                style={{ touchAction: "none" }}
+                onPointerDown={(e) => start(e, "both")}
+              />
+              <Button
+                variant="plain"
+                size="bare"
+                aria-label="이미지·도형 가로 조절"
+                className="absolute -right-2 top-1/2 h-4 w-3 cursor-ew-resize border border-white bg-blue-600"
+                onPointerDown={(e) => start(e, "x")}
+              />
+              <Button
+                variant="plain"
+                size="bare"
+                aria-label="이미지·도형 세로 조절"
+                className="absolute -bottom-2 left-1/2 h-3 w-4 cursor-ns-resize border border-white bg-blue-600"
+                onPointerDown={(e) => start(e, "y")}
+              />
+            </div>
+            <Dialog open={sizeOpen} onOpenChange={setSizeOpen}>
+              <DialogContent className="w-fit space-y-3">
+                <DialogTitle>이미지·도형 크기</DialogTitle>
+                <DialogDescription>가로와 세로 크기를 입력하세요.</DialogDescription>
+                <SizeControls
+                  key={`${selected.id}:${old?.width}:${old?.height}`}
+                  label="이미지·도형"
+                  width={old!.width}
+                  height={old!.height}
+                  disabled={disabled || committing}
+                  onApply={(width, height) => {
+                    setSizeOpen(false);
+                    const matrix = graphicTransform(selected, { ...old!, width, height });
+                    if (matrix)
+                      void apply({
+                        kind: "transformGraphic",
+                        page: page.pageIndex,
+                        object: selected.id,
+                        matrix,
+                      });
+                  }}
+                />
+              </DialogContent>
+            </Dialog>
+          </>
+        )}
+        <MessageDialog
+          kind="error"
+          message={active ? error : null}
+          onDismiss={() => setError(null)}
+        />
+      </div>
+    </ActionContextMenu>
   );
 }

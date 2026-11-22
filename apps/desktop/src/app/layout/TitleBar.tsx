@@ -64,7 +64,7 @@ export function TitleBar() {
               label: maximized ? "이전 크기로 복원" : "창 최대화",
               Icon: maximized ? Copy : Square,
             },
-            { action: "close", label: "앱 닫기", Icon: X },
+            { action: "close", label: "앱 종료", Icon: X },
           ] as const
         ).map(({ action, label, Icon }) => (
           <Button
@@ -79,9 +79,10 @@ export function TitleBar() {
           </Button>
         ))}
       </header>
-      <MessageDialog message={error} onDismiss={() => setError(null)} />
+      <MessageDialog kind="error" message={error} onDismiss={() => setError(null)} />
       <MessageDialog
         title="탭 복원 및 저장"
+        kind="warning"
         message={persistenceError}
         onDismiss={dismissPersistenceError}
       />

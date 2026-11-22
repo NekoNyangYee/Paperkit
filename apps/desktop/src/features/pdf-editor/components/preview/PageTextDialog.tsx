@@ -1,7 +1,7 @@
+import { ActionButton } from "@/shared/ui/action-button";
 import { useEffect, useRef, useState } from "react";
-import { X, Copy, RefreshCw } from "lucide-react";
+import { Copy, RefreshCw } from "lucide-react";
 import { Button } from "@/shared/ui/button";
-import { IconButton } from "@/shared/ui/icon-button";
 import { Textarea } from "@/shared/ui/input";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/shared/ui/dialog";
 import { readPage, type ReadPageResult } from "../../lib/ensemble/read-page";
@@ -69,7 +69,6 @@ export function PageTextDialog({
       <DialogContent className="flex max-h-[85dvh] w-[min(94vw,760px)] flex-col gap-4 p-6">
         <div className="flex items-center justify-between">
           <DialogTitle className="text-lg font-semibold">페이지 글자 · {pageIndex + 1}</DialogTitle>
-          <IconButton icon={X} label="글자 추출 창 닫기" onClick={close} />
         </div>
         <DialogDescription className="sr-only">
           현재 페이지에서 읽은 글자를 확인하고 복사합니다.
@@ -107,13 +106,16 @@ export function PageTextDialog({
         )}
         <div className="flex flex-wrap justify-end gap-2">
           {error && (
-            <Button variant="outline" disabled={pending} onClick={() => void load()}>
-              다시 시도
-            </Button>
+            <ActionButton
+              action="retry"
+              variant="outline"
+              disabled={pending}
+              onClick={() => void load()}
+            />
           )}
           <Button variant="ghost" disabled={pending} onClick={() => void load(true)}>
             <RefreshCw size={14} />
-            이미지에서 다시 읽기
+            OCR 다시 읽기
           </Button>
           <Button
             disabled={pending || !result?.text}

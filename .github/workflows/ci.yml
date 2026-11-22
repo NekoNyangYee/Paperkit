@@ -162,6 +162,7 @@ jobs:
           docker compose --env-file .env restart backend
           docker compose --env-file .env up -d --wait --wait-timeout 120
           python3 deploy/smoke.py http://127.0.0.1:18080/paperkit
+          bash .github/scripts/test-storage.sh
       - name: Container logs
         if: failure()
         run: docker compose --env-file .env logs --tail=100

@@ -1,19 +1,32 @@
+import { ActionButton } from "@/shared/ui/action-button";
 import { useEffect, useRef, useState } from "react";
-import { ArrowUpRight, ImagePlus, Plus, Stamp, Trash2, Type, X, Check, Pencil } from "lucide-react";
+import {
+  Copy,
+  ArrowUpRight,
+  ImagePlus,
+  Plus,
+  Stamp,
+  Trash2,
+  Type,
+  Check,
+  Pencil,
+} from "lucide-react";
 import { SignatureDialog } from "@/features/pdf-editor/components/stamps/SignatureDialog";
 import { useAuthStore } from "@/features/auth/model/auth-store";
 import { Button } from "@/shared/ui/button";
 import { IconButton } from "@/shared/ui/icon-button";
 import { Input, Textarea } from "@/shared/ui/input";
-import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/shared/ui/dialog";
+import { Dialog, DialogContent, DialogDescription } from "@/shared/ui/dialog";
+import { DialogBreadcrumbs, type DialogCrumb } from "@/shared/ui/dialog-breadcrumbs";
 import { useConfirmDialog } from "@/shared/ui/confirm-dialog";
 import { useDialogClose } from "@/shared/ui/use-dialog-close";
-import { useToolStore } from "../model/tool-store";
+import { useTools } from "../model/tool-store";
 import type { LibraryTool, ToolKind } from "../lib/api";
 import { LibrarySignIn } from "./LibrarySignIn";
 import { UserFacingError, userErrorMessage, type ErrorContext } from "@/shared/lib/errors";
 import { readToolImage } from "../lib/tool-image";
 import { ToolEditDialog } from "./ToolEditDialog";
+import { ActionContextMenu, ContextMenuItem } from "@/shared/ui/context-menu";
 
 const labels: Record<ToolKind, string> = {
   image: "이미지",
@@ -47,20 +60,10 @@ function ToolPreview({ tool, small = false }: { tool: LibraryTool; small?: boole
     </div>
   );
 }
-function useTools() {
-  const owner = useAuthStore((s) => s.session?.user.id);
-  const accessToken = useAuthStore((s) => s.session?.access_token);
-  const state = useToolStore();
-  useEffect(() => {
-    const current = useToolStore.getState();
-    if (owner) void current.load(owner);
-  }, [owner, accessToken]);
-  return { ...state, tools: state.owner === owner ? state.tools : [], owner };
-}
 
 export function ToolShelf() {
   const { tools, owner, error, loading, load } = useTools();
-  const [open, setOpen] = useState<"list" | "create" | null>(null);
+  const [open, setOpen] = useState<"list" | "create" | LibraryTool | null>(null);
   if (!owner) return null;
   return (
     <aside
@@ -85,9 +88,12 @@ export function ToolShelf() {
           {error && (
             <div role="alert" className="mt-4 text-xs leading-5 text-stone-600">
               {error}
-              <Button variant="ghost" size="sm" onClick={() => void load(owner)}>
-                다시 시도
-              </Button>
+              <ActionButton
+                action="retry"
+                variant="ghost"
+                size="sm"
+                onClick={() => void load(owner)}
+              />
             </div>
           )}
           {!loading && !error && !tools.length && (
@@ -95,18 +101,39 @@ export function ToolShelf() {
           )}
           <div className="mt-5 space-y-3">
             {tools.slice(0, 4).map((tool) => (
-              <button
+              <ActionContextMenu
                 key={tool.id}
-                type="button"
-                className="flex w-full items-center gap-3 rounded-md text-left hover:bg-stone-200/40 focus-visible:outline-emerald-700"
-                onClick={() => setOpen("list")}
+                label={tool.name}
+                items={
+                  <>
+                    <ContextMenuItem onSelect={() => setOpen(tool)}>
+                      <ArrowUpRight />
+                      도구 상세 보기
+                    </ContextMenuItem>
+                    <ContextMenuItem onSelect={() => setOpen("list")}>
+                      <Stamp />내 도구함 열기
+                    </ContextMenuItem>
+                    <ContextMenuItem onSelect={() => setOpen("create")}>
+                      <Plus />
+                      도구 추가
+                    </ContextMenuItem>
+                  </>
+                }
               >
-                <ToolPreview tool={tool} small />
-                <span className="min-w-0">
-                  <span className="block truncate text-xs font-medium">{tool.name}</span>
-                  <span className="mt-1 block text-[11px] text-stone-400">{labels[tool.kind]}</span>
-                </span>
-              </button>
+                <button
+                  type="button"
+                  className="flex w-full items-center gap-3 rounded-md text-left hover:bg-stone-200/40 focus-visible:outline-emerald-700"
+                  onClick={() => setOpen(tool)}
+                >
+                  <ToolPreview tool={tool} small />
+                  <span className="min-w-0">
+                    <span className="block truncate text-xs font-medium">{tool.name}</span>
+                    <span className="mt-1 block text-[11px] text-stone-400">
+                      {labels[tool.kind]}
+                    </span>
+                  </span>
+                </button>
+              </ActionContextMenu>
             ))}
           </div>
           {tools.length > 4 && (
@@ -116,13 +143,18 @@ export function ToolShelf() {
               className="mt-5 w-full justify-between border border-stone-300 bg-transparent text-xs text-stone-600"
               onClick={() => setOpen("list")}
             >
-              모두 보기 · {tools.length}
-              <ArrowUpRight size={14} />
+              <ArrowUpRight size={14} /> 모두 보기 · {tools.length}
             </Button>
           )}
         </>
       )}
-      {open && <ToolboxDialog initialAdding={open === "create"} onClose={() => setOpen(null)} />}
+      {open && (
+        <ToolboxDialog
+          initialAdding={open === "create"}
+          initialTool={typeof open === "object" ? open : undefined}
+          onClose={() => setOpen(null)}
+        />
+      )}
     </aside>
   );
 }
@@ -131,10 +163,12 @@ export function ToolboxDialog({
   onClose,
   onUse,
   initialAdding = false,
+  initialTool,
 }: {
   onClose: () => void;
   onUse?: (tool: LibraryTool) => Promise<boolean>;
   initialAdding?: boolean;
+  initialTool?: LibraryTool;
 }) {
   const { owner } = useTools();
   if (!owner) return null;
@@ -145,6 +179,7 @@ export function ToolboxDialog({
       onClose={onClose}
       onUse={onUse}
       initialAdding={initialAdding}
+      initialTool={initialTool}
     />
   );
 }
@@ -153,18 +188,23 @@ function ToolboxContent({
   onClose,
   onUse,
   initialAdding,
+  initialTool,
 }: {
   owner?: string;
   onClose: () => void;
   onUse?: (tool: LibraryTool) => Promise<boolean>;
   initialAdding: boolean;
+  initialTool?: LibraryTool;
 }) {
   const closing = useDialogClose(onClose);
   const { tools, loading, error: loadError, load, add, remove } = useTools();
-  const [adding, setAdding] = useState(initialAdding);
+  const [addFrom, setAddFrom] = useState<"shelf" | "list" | null>(initialAdding ? "shelf" : null);
+  const adding = addFrom !== null;
   const [editing, setEditing] = useState<LibraryTool | null>(null);
   const [kind, setKind] = useState<ToolKind>("image");
-  const [filter, setFilter] = useState<ToolKind | "all">("all");
+  const [filter, setFilter] = useState<ToolKind | "all">(initialTool?.kind ?? "all");
+  const [detailId, setDetailId] = useState(initialTool?.id);
+  const detail = tools.find((tool) => tool.id === detailId);
   const [drawingSignature, setDrawingSignature] = useState(false);
   const [name, setName] = useState("");
   const [content, setContent] = useState("");
@@ -176,9 +216,9 @@ function ToolboxContent({
   const [copied, setCopied] = useState<string | null>(null);
   const fileInput = useRef<HTMLInputElement>(null);
   const removeDialog = useConfirmDialog({
+    kind: "delete",
     title: "도구 삭제",
     description: "저장된 도구를 삭제할까요? 이미 PDF에 넣은 내용은 유지됩니다.",
-    confirmLabel: "삭제",
   });
   useEffect(() => {
     mounted.current = true;
@@ -233,6 +273,19 @@ function ToolboxContent({
   const close = () => {
     if (!working.current) closing.close();
   };
+  function showList(nextFilter: ToolKind | "all") {
+    setEditing(null);
+    setDrawingSignature(false);
+    setDetailId(undefined);
+    setAddFrom(null);
+    setFilter(nextFilter);
+    setError(null);
+  }
+  const listPath: DialogCrumb[] = [{ label: "내 도구함", onClick: () => showList("all") }];
+  if (filter !== "all") listPath.push({ label: labels[filter], onClick: () => showList(filter) });
+  const editPath = detail
+    ? [...listPath, { label: detail.name, onClick: () => setEditing(null) }]
+    : listPath;
   return (
     <Dialog
       open={closing.open}
@@ -240,33 +293,35 @@ function ToolboxContent({
         if (!next) close();
       }}
     >
-      <DialogContent
-        className="w-[min(94vw,760px)] p-0"
-        onEscapeKeyDown={(e) => {
-          if (busy) e.preventDefault();
-        }}
-        onPointerDownOutside={(e) => {
-          if (busy) e.preventDefault();
-        }}
-      >
-        <div className="flex items-start justify-between border-b border-stone-200 px-6 py-5">
+      <DialogContent className="w-[min(94vw,760px)] p-0" cancelDisabled={busy}>
+        <div className="flex items-start justify-between border-b border-stone-200 pl-6 pr-14 py-5">
           <div>
-            <DialogTitle className="text-lg font-semibold">
-              {adding ? "도구 추가" : "내 도구함"}
-            </DialogTitle>
+            <DialogBreadcrumbs
+              parents={adding || detail ? listPath : []}
+              title={adding ? "도구 추가" : (detail?.name ?? "내 도구함")}
+              disabled={busy}
+            />
             <DialogDescription className="sr-only">
-              {adding ? "도구 종류 선택" : "저장한 도구 목록"}
+              {adding ? "도구 종류 선택" : detail ? labels[detail.kind] : "저장한 도구 목록"}
             </DialogDescription>
           </div>
-          <IconButton icon={X} label="도구함 닫기" disabled={busy} onClick={close} />
         </div>
         {removeDialog.dialog}
         {editing && owner && (
-          <ToolEditDialog tool={editing} owner={owner} onClose={() => setEditing(null)} />
+          <ToolEditDialog
+            tool={editing}
+            owner={owner}
+            parents={editPath}
+            onClose={() => setEditing(null)}
+          />
         )}
         {drawingSignature && (
           <SignatureDialog
             purpose="tool"
+            parents={[
+              ...listPath,
+              { label: "도구 추가", onClick: () => setDrawingSignature(false) },
+            ]}
             onClose={() => setDrawingSignature(false)}
             onApply={async (png) => {
               if (!current()) return false;
@@ -285,7 +340,7 @@ function ToolboxContent({
             <LibrarySignIn />
           ) : (
             <>
-              {!adding && (
+              {!adding && !detail && (
                 <div className="mb-5 flex items-center justify-between">
                   <span className="text-xs text-stone-400">보관한 도구 {tools.length} / 50</span>
                   {
@@ -294,10 +349,10 @@ function ToolboxContent({
                       size="sm"
                       disabled={busy || loading || tools.length >= 50}
                       onClick={() => {
-                        setAdding(true);
+                        setAddFrom("list");
                         setContent("");
                         setName("");
-                        setKind("image");
+                        setKind(filter === "all" ? "image" : filter);
                         setError(null);
                       }}
                     >
@@ -315,12 +370,12 @@ function ToolboxContent({
                     void perform(async () => {
                       await add({ name: name.trim(), kind, content }, owner);
                       if (current()) {
-                        if (initialAdding) {
+                        if (addFrom === "shelf") {
                           closing.close();
                           return;
                         }
-                        setAdding(false);
-                        setFilter("all");
+                        setAddFrom(null);
+                        if (filter !== "all") setFilter(kind);
                         setContent("");
                         setName("");
                       }
@@ -439,19 +494,66 @@ function ToolboxContent({
                           </label>
                         )}
                         <div className="flex justify-end border-t border-stone-100 pt-4">
-                          <Button
+                          <ActionButton
+                            busy={busy}
+                            action="save"
                             type="submit"
                             size="sm"
                             disabled={!name.trim() || !content.trim() || busy}
                             className="bg-emerald-900 text-white hover:bg-emerald-800"
-                          >
-                            {busy ? "처리 중…" : "보관하기"}
-                          </Button>
+                          />
                         </div>
                       </>
                     )}
                   </fieldset>
                 </form>
+              ) : detail ? (
+                <div className="space-y-5">
+                  {detail.kind === "image" || detail.kind === "signature" ? (
+                    <img
+                      src={detail.content}
+                      alt={detail.name}
+                      className="mx-auto max-h-[48vh] max-w-full object-contain"
+                    />
+                  ) : (
+                    <p className="max-h-[48vh] overflow-auto whitespace-pre-wrap break-words rounded-md bg-stone-50 p-4 text-sm">
+                      {detail.content}
+                    </p>
+                  )}
+                  <div className="flex flex-wrap justify-end gap-2">
+                    {(detail.kind === "text" || detail.kind === "watermark") && (
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        disabled={busy}
+                        onClick={() => useTool(detail)}
+                      >
+                        <Copy size={16} aria-hidden="true" />{" "}
+                        {copied === detail.id ? "복사됨" : "복사"}
+                      </Button>
+                    )}
+                    <ActionButton
+                      action="edit"
+                      variant="outline"
+                      size="sm"
+                      disabled={busy}
+                      onClick={() => setEditing(detail)}
+                    />
+                    <ActionButton
+                      action="delete"
+                      variant="ghost"
+                      size="sm"
+                      disabled={busy}
+                      onClick={async () => {
+                        if (await removeDialog.confirm())
+                          void perform(async () => {
+                            await remove(detail.id, owner);
+                            if (current()) showList(filter);
+                          }, "toolRemove");
+                      }}
+                    />
+                  </div>
+                </div>
               ) : (
                 <>
                   <div
@@ -491,13 +593,9 @@ function ToolboxContent({
                       <div key={tool.id} className="relative min-w-0">
                         <button
                           type="button"
-                          aria-label={`${tool.name} ${onUse ? (tool.kind === "watermark" ? "설정 열기" : tool.kind === "text" ? "문구 복사" : "문서에 넣기") : tool.kind === "text" || tool.kind === "watermark" ? "문구 복사" : "미리보기"}`}
-                          disabled={
-                            busy ||
-                            !!editing ||
-                            (!onUse && (tool.kind === "image" || tool.kind === "signature"))
-                          }
-                          onClick={() => useTool(tool)}
+                          aria-label={`${tool.name} ${onUse ? (tool.kind === "watermark" ? "설정 열기" : tool.kind === "text" ? "문구 복사" : "문서에 넣기") : "상세 보기"}`}
+                          disabled={busy || !!editing}
+                          onClick={() => (onUse ? useTool(tool) : setDetailId(tool.id))}
                           className="group block w-full rounded-md text-left outline-offset-4 transition-colors enabled:hover:bg-stone-50 focus-visible:outline-emerald-700 disabled:cursor-default"
                         >
                           <ToolPreview tool={tool} />
@@ -552,14 +650,13 @@ function ToolboxContent({
                 >
                   <span>{error ?? loadError}</span>
                   {loadError && !adding && (
-                    <Button
+                    <ActionButton
+                      action="retry"
                       variant="ghost"
                       size="sm"
                       disabled={busy || loading}
                       onClick={() => void load(owner)}
-                    >
-                      다시 시도
-                    </Button>
+                    />
                   )}
                 </div>
               )}

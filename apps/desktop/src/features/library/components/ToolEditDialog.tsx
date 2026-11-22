@@ -1,9 +1,10 @@
+import { ActionButton } from "@/shared/ui/action-button";
 import { useEffect, useRef, useState } from "react";
-import { X } from "lucide-react";
+import { PenLine, ImagePlus } from "lucide-react";
 import { Button } from "@/shared/ui/button";
-import { IconButton } from "@/shared/ui/icon-button";
 import { Input, Textarea } from "@/shared/ui/input";
-import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/shared/ui/dialog";
+import { Dialog, DialogContent, DialogDescription } from "@/shared/ui/dialog";
+import { DialogBreadcrumbs, type DialogCrumb } from "@/shared/ui/dialog-breadcrumbs";
 import { useDialogClose } from "@/shared/ui/use-dialog-close";
 import { UserFacingError, userErrorMessage } from "@/shared/lib/errors";
 import { useAuthStore } from "@/features/auth/model/auth-store";
@@ -15,10 +16,12 @@ import type { LibraryTool } from "../lib/api";
 export function ToolEditDialog({
   tool,
   owner,
+  parents,
   onClose,
 }: {
   tool: LibraryTool;
   owner: string;
+  parents: DialogCrumb[];
   onClose: () => void;
 }) {
   const { open, close } = useDialogClose(onClose);
@@ -63,18 +66,9 @@ export function ToolEditDialog({
         if (!next) dismiss();
       }}
     >
-      <DialogContent
-        className="w-[min(92vw,480px)] p-0"
-        onEscapeKeyDown={(event) => {
-          if (busy) event.preventDefault();
-        }}
-        onPointerDownOutside={(event) => {
-          if (busy) event.preventDefault();
-        }}
-      >
-        <div className="flex items-center justify-between border-b border-stone-200 px-5 py-4">
-          <DialogTitle className="text-base font-semibold">도구 수정</DialogTitle>
-          <IconButton icon={X} label="수정 창 닫기" disabled={busy} onClick={dismiss} />
+      <DialogContent className="w-[min(92vw,480px)] p-0" cancelDisabled={busy}>
+        <div className="flex items-center justify-between border-b border-stone-200 pl-5 pr-14 py-4">
+          <DialogBreadcrumbs parents={parents} title="도구 수정" disabled={busy} />
         </div>
         <DialogDescription className="sr-only">저장한 도구의 이름과 내용 수정</DialogDescription>
         <form
@@ -117,7 +111,7 @@ export function ToolEditDialog({
                     size="sm"
                     onClick={() => setDrawing(true)}
                   >
-                    서명 다시 그리기
+                    <PenLine size={16} aria-hidden="true" /> 다시 그리기
                   </Button>
                 ) : (
                   <>
@@ -144,7 +138,7 @@ export function ToolEditDialog({
                       size="sm"
                       onClick={() => fileInput.current?.click()}
                     >
-                      이미지 바꾸기
+                      <ImagePlus size={16} aria-hidden="true" /> 이미지 변경
                     </Button>
                   </>
                 )}
@@ -169,22 +163,20 @@ export function ToolEditDialog({
             </p>
           )}
           <div className="flex justify-end gap-2 pt-1">
-            <Button type="button" variant="ghost" size="sm" disabled={busy} onClick={dismiss}>
-              취소
-            </Button>
-            <Button
+            <ActionButton
+              busy={busy}
+              action="save"
               type="submit"
               size="sm"
               disabled={busy || !changed || !name.trim() || !content.trim()}
               className="bg-emerald-900 text-white hover:bg-emerald-800"
-            >
-              {busy ? "저장 중…" : "저장"}
-            </Button>
+            />
           </div>
         </form>
         {drawing && (
           <SignatureDialog
             purpose="tool"
+            parents={[...parents, { label: "도구 수정", onClick: () => setDrawing(false) }]}
             onClose={() => setDrawing(false)}
             onApply={async (png) => {
               if (!current()) return false;

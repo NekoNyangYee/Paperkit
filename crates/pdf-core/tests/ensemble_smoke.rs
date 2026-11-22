@@ -103,38 +103,52 @@ fn ensemble_reads_forms_routes_scans_checks_revisions_and_preserves_permissions(
         original,
         "OCR and edits never overwrite source"
     );
+    let ocr = |png: &[u8]| {
+        pdf_core::ocr::recognize(&resources.join("ocr"), png, &false.into(), |_| {})
+            .unwrap()
+            .text
+    };
+    assert!(ocr(extracted.png.as_ref().unwrap()).contains("PAPERKIT INVOICE 12345"));
+    let korean_state = engine
+        .edit(
+            "native".into(),
+            0,
+            EditAction::EditWithFallback {
+                page: 0,
+                group: None,
+                object: Some(0),
+                text: "한글 문서 확인".into(),
+            },
+        )
+        .unwrap();
+    // Body-sized Korean text, representative of a scanned document rather
+    // than the 32 pt display heading used by the English geometry fixture.
+    engine
+        .edit(
+            "native".into(),
+            korean_state.revision,
+            EditAction::ScaleText {
+                page: 0,
+                objects: vec![0],
+                sx: 0.5,
+                sy: 0.5,
+            },
+        )
+        .unwrap();
+    let korean_png = engine.render("native".into(), native, 0, 1600).unwrap().png;
+    assert!(ocr(&korean_png)
+        .split_whitespace()
+        .collect::<String>()
+        .contains("한글문서확인"));
+    assert!(matches!(
+        pdf_core::ocr::recognize(&resources.join("ocr"), &korean_png, &true.into(), |_| {}),
+        Err(pdf_core::ocr::OcrError::Cancelled)
+    ));
     if let Some(directory) = std::env::var_os("PAPERKIT_ENSEMBLE_FIXTURES") {
         let directory = PathBuf::from(directory);
         fs::create_dir_all(&directory).unwrap();
         fs::write(directory.join("ocr.png"), bitmap).unwrap();
-        let korean_state = engine
-            .edit(
-                "native".into(),
-                0,
-                EditAction::EditWithFallback {
-                    page: 0,
-                    group: None,
-                    object: Some(0),
-                    text: "한글 문서 확인".into(),
-                },
-            )
-            .unwrap();
-        // Body-sized Korean text, representative of a scanned document rather
-        // than the 32 pt display heading used by the English geometry fixture.
-        engine
-            .edit(
-                "native".into(),
-                korean_state.revision,
-                EditAction::ScaleText {
-                    page: 0,
-                    objects: vec![0],
-                    sx: 0.5,
-                    sy: 0.5,
-                },
-            )
-            .unwrap();
-        let bitmap = engine.render("native".into(), native, 0, 1600).unwrap().png;
-        fs::write(directory.join("ocr-kor.png"), bitmap).unwrap();
+        fs::write(directory.join("ocr-kor.png"), korean_png).unwrap();
         engine
             .edit(
                 "scan".into(),

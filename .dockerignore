@@ -14,3 +14,5 @@
 !crates/
 !crates/pdf-core/
 !crates/pdf-core/Cargo.toml
+!deploy/
+!deploy/storage-start.sh

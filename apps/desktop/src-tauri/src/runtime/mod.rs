@@ -1,5 +1,5 @@
 //! Desktop startup, managed state and IPC registration.
-use crate::commands::{auth, files, preview, updates};
+use crate::commands::{auth, files, preview, reading, updates};
 use tauri::Manager;
 
 pub fn run() {
@@ -8,8 +8,14 @@ pub fn run() {
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_store::Builder::default().build())
         .manage(files::AppState::default())
+        .manage(reading::ReadJobs::default())
         .manage(updates::UpdateState::default())
         .manage(auth::AuthState::default())
+        .on_window_event(|window, event| {
+            if window.label() == "main" && matches!(event, tauri::WindowEvent::Destroyed) {
+                window.state::<auth::AuthState>().close(None);
+            }
+        })
         .setup(|app| {
             #[cfg(debug_assertions)]
             let library = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -32,6 +38,7 @@ pub fn run() {
         .invoke_handler(tauri::generate_handler![
             auth::begin_google_login,
             auth::finish_google_login,
+            auth::complete_google_login,
             auth::cancel_google_login,
             auth::read_auth_refresh_token,
             auth::write_auth_refresh_token,
@@ -41,8 +48,11 @@ pub fn run() {
             files::synchronize_selection,
             files::clear_selection,
             preview::render_selected_page,
-            preview::extract_page_text,
+            reading::extract_page_text,
+            reading::cancel_page_read,
             preview::edit_document,
+            preview::save_masked_copy,
+            preview::preview_text_masks,
             preview::list_fonts,
             preview::editor_font,
             preview::document_font,

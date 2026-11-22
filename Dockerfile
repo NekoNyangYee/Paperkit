@@ -30,6 +30,7 @@ RUN apt-get update \
     && chown 10001:10001 /data /backup \
     && chmod 700 /data /backup
 COPY --from=build /usr/local/bin/paperkit-api /usr/local/bin/paperkit-api
+COPY deploy/storage-start.sh /usr/local/bin/paperkit-storage-start
 USER 10001:10001
 ENV BIND_ADDRESS=0.0.0.0:8080 DATABASE_PATH=/data/paperkit.sqlite3
 EXPOSE 8080

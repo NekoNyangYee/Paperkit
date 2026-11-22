@@ -1,10 +1,10 @@
+import { ActionButton } from "@/shared/ui/action-button";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { invoke } from "@tauri-apps/api/core";
-import { X } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/shared/ui/dialog";
 import { userErrorMessage } from "@/shared/lib/errors";
-import { IconButton } from "@/shared/ui/icon-button";
-import { Button } from "@/shared/ui/button";
+import { SavedToolPicker } from "@/features/library/components/SavedToolPicker";
+import { toolPngBytes } from "@/features/library/lib/tool-image";
 import { Switch } from "@/shared/ui/switch";
 import { Slider } from "@/shared/ui/slider";
 import { RadioGroup, RadioGroupItem } from "@/shared/ui/radio-group";
@@ -41,6 +41,7 @@ export function WatermarkDialog({
 }) {
   const { open, close } = useDialogClose(onClose);
   const resetDialog = useConfirmDialog({
+    kind: "reset",
     title: "워터마크 설정 초기화",
     description:
       "입력한 텍스트와 선택한 이미지, 색상, 투명도, 크기, 각도, 적용 범위를 처음 값으로 되돌릴까요?",
@@ -219,11 +220,13 @@ export function WatermarkDialog({
         if (!value && !applying.current && !resetDialog.isOpen) close();
       }}
     >
-      <DialogContent className="grid h-[min(680px,calc(100dvh-64px))] w-[min(94vw,900px)] grid-rows-[auto_minmax(0,1fr)_auto] gap-4 overflow-hidden p-5 [@media(max-height:650px)]:gap-3 [@media(max-height:650px)]:p-4">
+      <DialogContent
+        cancelDisabled={pending}
+        className="grid h-[min(680px,calc(100dvh-64px))] w-[min(94vw,900px)] grid-rows-[auto_minmax(0,1fr)_auto] gap-4 overflow-hidden p-5 [@media(max-height:650px)]:gap-3 [@media(max-height:650px)]:p-4"
+      >
         <header className="min-w-0">
           <div className="flex items-center justify-between gap-3">
             <DialogTitle className="text-lg font-semibold">워터마크</DialogTitle>
-            <IconButton icon={X} label="워터마크 창 닫기" disabled={pending} onClick={close} />
           </div>
           <DialogDescription className="sr-only">
             워터마크를 켜서 추가·교체하거나, 꺼서 제거하세요. 적용 전 미리보기로 확인할 수 있습니다.
@@ -235,6 +238,24 @@ export function WatermarkDialog({
             className="min-h-0 min-w-0 space-y-4 overflow-y-auto [@media(max-height:650px)]:space-y-3"
           >
             <legend className="sr-only">워터마크 설정</legend>
+            <SavedToolPicker
+              inline
+              kind={options.kind === "image" ? "image" : "watermark"}
+              label={options.kind === "image" ? "내 도구함 · 이미지" : "내 도구함 · 워터마크"}
+              disabled={pending}
+              onPick={(tool) => {
+                if (tool.kind === "image") {
+                  const image = new File([Uint8Array.from(toolPngBytes(tool.content))], tool.name, {
+                    type: "image/png",
+                  });
+                  setOptions((previous) => ({ ...previous, image }));
+                } else {
+                  setOptions((previous) => ({ ...previous, text: tool.content }));
+                }
+                setError(null);
+                setEnabled(true);
+              }}
+            />
             <div className="flex items-center justify-between rounded-lg border border-stone-200 px-3 py-2">
               <label htmlFor="watermark-enabled" className="text-sm font-medium">
                 워터마크 사용
@@ -405,15 +426,14 @@ export function WatermarkDialog({
               </div>
               {enabled && (
                 <div className="mt-2 flex justify-end">
-                  <Button
+                  <ActionButton
+                    action="reset"
                     variant="link"
                     size="link"
                     disabled={pending}
                     onClick={() => void reset()}
                     title="모든 워터마크 설정을 처음 값으로 되돌립니다."
-                  >
-                    초기화
-                  </Button>
+                  />
                 </div>
               )}
             </div>
@@ -468,27 +488,21 @@ export function WatermarkDialog({
             </p>
           )}
           {backgroundError && (
-            <Button
+            <ActionButton
+              action="retry"
               variant="ghost"
               size="sm"
               disabled={pending}
               onClick={() => setBackgroundRetry((value) => value + 1)}
-            >
-              미리보기 다시 불러오기
-            </Button>
+            />
           )}
-          <div className="flex justify-end gap-3">
-            <div className="flex shrink-0 gap-2">
-              <Button variant="outline" disabled={pending} onClick={close}>
-                취소
-              </Button>
-              <Button
-                disabled={pending || (enabled ? !ready || !backgroundReady : !hasWatermark)}
-                onClick={() => void apply()}
-              >
-                {pending ? "적용 중…" : enabled ? "워터마크 적용" : "워터마크 제거"}
-              </Button>
-            </div>
+          <div className="flex justify-end">
+            <ActionButton
+              busy={pending}
+              action={enabled ? "apply" : "delete"}
+              disabled={enabled ? !ready || !backgroundReady : !hasWatermark}
+              onClick={() => void apply()}
+            />
           </div>
         </footer>
       </DialogContent>

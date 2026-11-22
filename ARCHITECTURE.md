@@ -62,6 +62,7 @@ apps/desktop/src-tauri/src/
   commands/
     files.rs                       파일 검사·선택 IPC와 DTO
     preview.rs                     렌더링·편집·글꼴 IPC와 DTO
+    reading.rs                     페이지 글자 추출·OCR 요청과 취소
     updates.rs                     업데이트 다운로드·검증·설치
 ```
 

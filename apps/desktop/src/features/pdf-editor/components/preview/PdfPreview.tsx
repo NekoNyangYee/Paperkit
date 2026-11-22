@@ -1,4 +1,8 @@
+import { ActionButton } from "@/shared/ui/action-button";
+import { readInlineText } from "@/features/pdf-editor/lib/text/inline-layout";
 import { Button } from "@/shared/ui/button";
+import { ActionContextMenu, ContextMenuItem, ContextMenuSeparator } from "@/shared/ui/context-menu";
+import { Asterisk, MoveHorizontal, ScanLine, ScanText } from "lucide-react";
 import { Input } from "@/shared/ui/input";
 import { SelectField } from "@/shared/ui/select";
 import { Popover, PopoverTrigger, PopoverContent } from "@/shared/ui/popover";
@@ -28,19 +32,17 @@ import {
   FolderOpen,
   Type,
   FileText,
-  ImagePlus,
-  ClipboardPaste,
   Stamp,
   PenLine,
   SlidersHorizontal,
-  Archive,
 } from "lucide-react";
 import { IconButton } from "@/shared/ui/icon-button";
 import { registerExitGuard, requestAppExit } from "@/shared/desktop/app-exit";
 import { MessageDialog, useDiscardDialog } from "@/shared/ui/MessageDialog";
+import type { MessageKind } from "@/shared/ui/dialog-feedback";
 import type { FileInfo } from "@/shared/desktop/files";
 import { errorMessage } from "@/shared/desktop/files";
-import { errorDetail, UserFacingError } from "@/shared/lib/errors";
+import { errorDetail } from "@/shared/lib/errors";
 import { useEventCallback } from "@/shared/lib/use-event-callback";
 import { renderPage, releasePreview, editDocument, listFonts } from "@/shared/pdf/api";
 import { previewCache } from "@/shared/pdf/preview-cache";
@@ -53,26 +55,24 @@ import {
   PageSidebar,
   type ThumbnailChange,
 } from "@/features/pdf-editor/components/pages/PageSidebar";
-import { ZoomSurface, type ZoomPoint } from "./ZoomSurface";
+import { usePageZoom } from "./usePageZoom";
+import { PageLoading } from "./PageLoading";
+import { ZoomSurface } from "./ZoomSurface";
 import { PageTextDialog } from "./PageTextDialog";
 import { TextPage } from "@/features/pdf-editor/components/text/TextPage";
 import { SizeControls } from "@/features/pdf-editor/components/controls/SizeControls";
-import { KeyboardHelp } from "@/features/pdf-editor/components/controls/KeyboardHelp";
-import {
-  clipboardImage,
-  readGraphicClipboard,
-  type GraphicContent,
-  isTextInput,
-} from "@/features/pdf-editor/lib/graphics/graphic-clipboard";
+import { isTextInput } from "@/features/pdf-editor/lib/graphics/graphic-clipboard";
 import { editorFont, clearOriginalFonts } from "@/features/pdf-editor/lib/fonts/editor-font";
 import { textBySource, fallbackCandidates } from "@/features/pdf-editor/lib/fonts/font-matching";
 import { selectionStyle, weightLabel } from "@/features/pdf-editor/lib/fonts/font-style";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/shared/ui/dialog";
 import { WatermarkDialog } from "@/features/pdf-editor/components/stamps/WatermarkDialog";
 import { SignatureDialog } from "@/features/pdf-editor/components/stamps/SignatureDialog";
+import { MaskDialog } from "@/features/pdf-editor/components/security/MaskDialog";
+import { SignatureStatus } from "@/features/pdf-editor/components/security/SignatureStatus";
 import { LoginRequiredDialog } from "@/features/auth/components/LoginRequiredDialog";
 import { useAuthStore } from "@/features/auth/model/auth-store";
-import { ToolboxDialog } from "@/features/library/components/Toolbox";
+import { SavedToolPicker } from "@/features/library/components/SavedToolPicker";
 import type { LibraryTool } from "@/features/library/lib/api";
 
 function originalFontIssue(cause: unknown) {
@@ -94,24 +94,23 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
     isOpen: discardOpen,
   } = useDiscardDialog();
   const resetDialog = useConfirmDialog({
+    kind: "reset",
     title: "텍스트 너비 초기화",
     description: "직접 조절한 문단 크기를 초기화하고 입력에 맞춰 너비를 자동으로 늘릴까요?",
   });
   const pageArea = useRef<HTMLElement>(null);
-  const imageInput = useRef<HTMLInputElement>(null);
+  const [maskPage, setMaskPage] = useState<PreviewPage | null>(null);
+  const signedEditDialog = useConfirmDialog({
+    kind: "discard",
+    title: "서명된 원본 편집",
+    description: "내용을 바꾼 사본은 원본 서명으로 검증할 수 없습니다. 편집을 계속할까요?",
+    action: "proceed",
+  });
   const [stampDialog, setStampDialog] = useState<"watermark" | "signature" | null>(null);
-  const [toolboxOpen, setToolboxOpen] = useState(false);
-  const [readingText, setReadingText] = useState(false);
-  const [watermarkText, setWatermarkText] = useState<string | undefined>();
+  const [textPageIndex, setTextPageIndex] = useState<number | null>(null);
   const [pageIndex, setPageIndex] = useState(initialView?.pageIndex ?? 0);
   const [pageInput, setPageInput] = useState(String((initialView?.pageIndex ?? 0) + 1));
   const [pageInputError, setPageInputError] = useState<string | null>(null);
-  const [zoom, setZoom] = useState(initialView?.zoom ?? 100);
-  const zoomValue = useRef(zoom);
-  useLayoutEffect(() => {
-    zoomValue.current = zoom;
-  }, [zoom]);
-  const zoomPoint = useRef<ZoomPoint | null>(null);
   const renderedLocation = useRef("");
   const [sidebarOpen, setSidebarOpen] = useState(initialView?.sidebarOpen ?? true);
   const [editingEnabled, setEditingEnabled] = useState(false);
@@ -144,8 +143,15 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
   const [fontWarning, setFontWarning] = useState<string | null>(null);
   const [replacementFont, setReplacementFont] = useState("pretendard");
   const [busy, setBusy] = useState(false);
+  const { zoom, setZoom, zoomPoint, bindViewport, zoomKey } = usePageZoom(
+    pageArea,
+    active,
+    busy || (loading && !page),
+    initialView?.zoom ?? 100,
+    composing,
+  );
   const [editError, setEditError] = useState<string | null>(null);
-  const [notice, setNotice] = useState<string | null>(null);
+  const [notice, setNotice] = useState<{ kind: MessageKind; text: string } | null>(null);
   const working = useRef(false);
   const fontPreparation = useRef(0);
   const preparingObject = useRef<{ id: number; request: number } | null>(null);
@@ -317,38 +323,6 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
     );
     setFontResolution(true);
   }
-
-  useEffect(() => {
-    const area = pageArea.current;
-    if (!area) return;
-    let frame: number | null = null;
-    const wheel = (event: WheelEvent) => {
-      // Chromium reports trackpad pinches as Ctrl+wheel even without a held Ctrl key.
-      // Ordinary two-finger scrolling must keep its native scrolling behavior.
-      if (!active || !event.ctrlKey || !Number.isFinite(event.deltaY) || event.deltaY === 0) return;
-      event.preventDefault();
-      if (busy || (loading && !page) || composing.current) return;
-      zoomPoint.current = { x: event.clientX, y: event.clientY };
-      // Zoom changes display geometry only; keep the PDF bitmap and edit state.
-      const current = zoomValue.current;
-      // Preserve fractional pinch movement; rounding every event loses slow gestures.
-      const next =
-        event.deltaMode === WheelEvent.DOM_DELTA_PIXEL && Math.abs(event.deltaY) < 80
-          ? current * Math.exp(-event.deltaY / 100)
-          : current + (event.deltaY < 0 ? 15 : -15);
-      zoomValue.current = Math.max(25, Math.min(400, next));
-      if (frame === null)
-        frame = requestAnimationFrame(() => {
-          frame = null;
-          setZoom(zoomValue.current);
-        });
-    };
-    area.addEventListener("wheel", wheel, { passive: false });
-    return () => {
-      area.removeEventListener("wheel", wheel);
-      if (frame !== null) cancelAnimationFrame(frame);
-    };
-  }, [active, busy, loading, page]);
 
   useEffect(() => {
     if (!editingEnabled) return;
@@ -543,7 +517,7 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
       return;
     if (object.editBlocked && object.fontChangeBlocked !== null && !object.group?.canFlow) {
       await choose(object);
-      setNotice(object.fontChangeBlocked ?? object.editBlocked);
+      setNotice({ kind: "warning", text: object.fontChangeBlocked ?? object.editBlocked });
       return;
     }
     if (unsavedDraft && selected?.id !== object.id) {
@@ -634,9 +608,10 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
       setEditError(null);
       setFontGeneration((value) => value + 1);
       if (!unsavedDraft) setRetry((value) => value + 1);
-      setNotice(
-        `원본 글꼴을 불러왔습니다: ${matched.join(", ")}. Windows 설치 없이 이번 앱 실행 동안 사용합니다. 입력할 문자가 포함되어 있는지 적용 전에 확인합니다.`,
-      );
+      setNotice({
+        kind: "success",
+        text: `원본 글꼴을 불러왔습니다: ${matched.join(", ")}. Windows 설치 없이 이번 앱 실행 동안 사용합니다. 입력할 문자가 포함되어 있는지 적용 전에 확인합니다.`,
+      });
     } catch (cause) {
       setEditError(errorMessage(cause, "font"));
     } finally {
@@ -698,11 +673,7 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
     void navigate(number - 1);
   }
 
-  async function run(
-    action: EditAction,
-    revision = editState.revision,
-    propagateError = false,
-  ): Promise<EditState | null> {
+  async function run(action: EditAction, revision = editState.revision): Promise<EditState | null> {
     if (
       ["addSignature", "addWatermark", "removeWatermark"].includes(action.kind) &&
       !useAuthStore.getState().session
@@ -753,7 +724,8 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
         setInlineEditing(false);
         setBlockSize(null);
       }
-      if (action.kind === "save") setNotice("새 PDF로 저장하고 다시 열어 검증했습니다.");
+      if (action.kind === "save")
+        setNotice({ kind: "success", text: "새 PDF로 저장하고 다시 열어 검증했습니다." });
       else {
         if (action.kind === "move" && selected) {
           const matrix = [...selected.matrix];
@@ -772,10 +744,6 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
       return result;
     } catch (cause) {
       setEditError(errorMessage(cause, action.kind === "save" ? "save" : "edit"));
-      if (propagateError)
-        throw new UserFacingError(
-          errorMessage(cause, action.kind === "addSignature" ? "signature" : "edit"),
-        );
       return null;
     } finally {
       working.current = false;
@@ -866,31 +834,12 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
     );
   }
 
-  async function insertGraphic(read: () => Promise<GraphicContent>) {
-    if (working.current || !page || !editingEnabled || loading || preparingEdit) return;
-    const committed = await commitDraft();
-    if (!committed || working.current) return;
-    working.current = true;
-    setBusy(true);
-    setEditError(null);
-    try {
-      const content = await read();
-      working.current = false;
-      await run({ ...content, page: pageIndex }, committed.revision);
-    } catch (cause) {
-      setEditError(errorMessage(cause, "image"));
-    } finally {
-      working.current = false;
-      setBusy(false);
-    }
-  }
-
-  async function insertStamp(action: EditAction, propagateError = false): Promise<boolean> {
+  async function insertStamp(action: EditAction): Promise<boolean> {
     if (!useAuthStore.getState().session) return false;
     if (working.current || !page || !editingEnabled || loading || preparingEdit) return false;
     const committed = await commitDraft();
     if (!committed) return false;
-    const result = await run(action, committed.revision, propagateError);
+    const result = await run(action, committed.revision);
     if (!result) return false;
     setSelected(null);
     setDraft("");
@@ -901,27 +850,9 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
 
   async function useLibraryTool(tool: LibraryTool): Promise<boolean> {
     if (!active || !useAuthStore.getState().session) return false;
-    if (tool.kind === "text") {
-      await navigator.clipboard.writeText(tool.content);
-      setNotice("문구를 복사했습니다.");
-      return true;
-    }
-    if (tool.kind === "watermark") {
-      setWatermarkText(tool.content);
-      setStampDialog("watermark");
-      return true;
-    }
-    const encoded = tool.content.split(",")[1];
-    const png = Array.from(atob(encoded), (char) => char.charCodeAt(0));
-    const applied = await insertStamp(
-      {
-        kind: tool.kind === "signature" ? "addSignature" : "pasteImage",
-        page: pageIndex,
-        png,
-      },
-      true,
-    );
-    if (!applied) throw new UserFacingError("입력 중인 내용을 먼저 반영한 뒤 다시 넣어 주세요.");
+    if (tool.kind !== "text") return false;
+    await navigator.clipboard.writeText(tool.content);
+    setNotice({ kind: "success", text: "문구를 복사했습니다." });
     return true;
   }
 
@@ -1037,19 +968,13 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
   useEffect(() => {
     const handler = (event: KeyboardEvent) => {
       if (!active || event.defaultPrevented) return;
-      if (document.querySelector('[role="alertdialog"], [role="dialog"]')) return;
+      if (document.querySelector('[role="alertdialog"], [role="dialog"], [role="menu"]')) return;
       if (event.isComposing || composing.current) return;
       const typing =
         event.target instanceof HTMLElement &&
         (event.target.matches("input, textarea") || event.target.isContentEditable);
-      if ((event.ctrlKey || event.metaKey) && !typing && ["+", "=", "-", "0"].includes(event.key)) {
+      if ((event.ctrlKey || event.metaKey) && !typing && zoomKey(event.key)) {
         event.preventDefault();
-        zoomPoint.current = null;
-        setZoom((current) =>
-          event.key === "0"
-            ? 100
-            : Math.max(25, Math.min(400, current + (event.key === "-" ? -15 : 15))),
-        );
         return;
       }
       if (event.key === "Escape" && !busy) {
@@ -1112,7 +1037,7 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
       !inlineEditing &&
       !unsavedDraft &&
       !isTextInput(target) &&
-      !document.querySelector('[role="dialog"], [role="alertdialog"]');
+      !document.querySelector('[role="dialog"], [role="alertdialog"], [role="menu"]');
     const copy = (event: ClipboardEvent) => {
       if (!available(event.target) || !event.clipboardData) return;
       event.preventDefault();
@@ -1175,6 +1100,58 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
     composing.current = value;
   });
 
+  function replaceWithStars() {
+    if (!selected || busy || loading || composing.current) return;
+    let value = "**";
+    const selection = window.getSelection();
+    if (inlineEditing && selection?.rangeCount && !selection.isCollapsed) {
+      const range = selection.getRangeAt(0);
+      const editor = pageArea.current?.querySelector<HTMLElement>(
+        '[contenteditable="plaintext-only"]',
+      );
+      if (!editor || !editor.contains(range.commonAncestorContainer)) return;
+      range.deleteContents();
+      range.insertNode(document.createTextNode("**"));
+      value = readInlineText(editor);
+    }
+    setDraft(value);
+    void commitDraft(value);
+  }
+  const basicTools = (
+    <div className="ribbon-group" role="group" aria-label="기본 기능">
+      <Button
+        variant="ghost"
+        size="sm"
+        disabled={busy || loading || !page || unsavedDraft}
+        onClick={() => setTextPageIndex(pageIndex)}
+      >
+        <FileText size={16} />
+        글자 추출
+      </Button>
+      <Button
+        variant="ghost"
+        size="sm"
+        disabled={!page || loading || busy || unsavedDraft}
+        onClick={() => setMaskPage(page)}
+      >
+        <ScanLine size={16} />
+        마스킹
+      </Button>
+      {editingEnabled && (
+        <Button
+          variant="ghost"
+          size="sm"
+          disabled={!selected || loading || busy || preparingEdit}
+          title="선택한 텍스트 또는 블록을 **로 대체"
+          onMouseDown={(e) => e.preventDefault()}
+          onClick={replaceWithStars}
+        >
+          <Asterisk size={16} aria-hidden="true" /> 별표 대체
+        </Button>
+      )}
+    </div>
+  );
+
   const pageWarning =
     editingEnabled && page
       ? (page.text.warning ??
@@ -1182,29 +1159,33 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
           ? "선택 가능한 텍스트 객체가 없습니다. 이미지나 윤곽선으로 저장된 글자일 수 있습니다."
           : null))
       : null;
-  const message = !active
-    ? null
-    : (editError ??
-      selectionError ??
-      error ??
-      pageInputError ??
-      (editingEnabled ? fontError : null) ??
-      notice ??
-      pageWarning);
+  const failure =
+    editError ?? selectionError ?? error ?? pageInputError ?? (editingEnabled ? fontError : null);
+  const message = active ? (failure ?? notice?.text ?? pageWarning) : null;
 
   return (
     <main className="flex h-full select-none overflow-hidden">
       {discardDialog}
       {resetDialog.dialog}
-      {active && toolboxOpen && (
-        <ToolboxDialog onClose={() => setToolboxOpen(false)} onUse={useLibraryTool} />
+      {signedEditDialog.dialog}
+      {maskPage && (
+        <MaskDialog
+          active={active}
+          file={file}
+          initial={maskPage}
+          onClose={() => setMaskPage(null)}
+          onSaved={() => {
+            setMaskPage(null);
+            setNotice({ kind: "success", text: "마스킹 사본을 검증하고 저장했습니다." });
+          }}
+        />
       )}
-      {active && readingText && (
+      {active && textPageIndex !== null && (
         <PageTextDialog
           fileId={file.id}
           revision={editState.revision}
-          pageIndex={pageIndex}
-          onClose={() => setReadingText(false)}
+          pageIndex={textPageIndex}
+          onClose={() => setTextPageIndex(null)}
         />
       )}
       <LoginRequiredDialog
@@ -1215,7 +1196,6 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
       {session && stampDialog === "watermark" && page && (
         <WatermarkDialog
           page={page}
-          initialText={watermarkText}
           onClose={() => setStampDialog(null)}
           onApply={insertStamp}
           applyError={editError}
@@ -1253,31 +1233,22 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
             />
           </label>
           <div className="mt-6 flex flex-wrap justify-end gap-2">
-            <Button
-              variant="ghost"
-              className="dialog-button"
-              onClick={() => setFontResolution(false)}
-            >
-              계속 편집
-            </Button>
-            <Button
+            <ActionButton
+              action="import"
               variant="ghost"
               className="dialog-button"
               onClick={() => {
                 setFontResolution(false);
                 void importOriginalFont();
               }}
-            >
-              원본 글꼴 불러오기
-            </Button>
-            <Button
+            />
+            <ActionButton
+              action="apply"
               variant="ghost"
               className="dialog-button bg-emerald-900 text-white"
               disabled={busy || !replacementFont || selected?.fontChangeBlocked !== null}
               onClick={() => void applyReplacementFont()}
-            >
-              대체 글꼴로 반영
-            </Button>
+            />
           </div>
         </DialogContent>
       </Dialog>
@@ -1296,6 +1267,7 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
           pageCount={pageCount}
           selectedPage={pageIndex}
           onSelect={(index) => void navigate(index)}
+          onReadText={page && !unsavedDraft ? setTextPageIndex : undefined}
           open={sidebarOpen}
         />
       )}
@@ -1322,15 +1294,7 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
               <p className="mt-1 text-xs text-stone-500">저장하지 않은 변경 있음</p>
             )}
           </div>
-          <Button
-            variant="ghost"
-            size="sm"
-            disabled={busy || loading || !page || unsavedDraft}
-            onClick={() => setReadingText(true)}
-          >
-            <FileText size={16} />
-            글자 추출
-          </Button>
+          {!!page?.signatures?.length && <SignatureStatus reports={page.signatures} />}
           <div className="flex items-center gap-3">
             <SelectField
               label="확대 비율"
@@ -1360,7 +1324,7 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
           </div>
           <IconButton
             icon={X}
-            label="닫기 · 다른 파일"
+            label="문서 나가기"
             disabled={busy || clearing}
             onClick={() => void closeDocument()}
           />
@@ -1371,19 +1335,21 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
             className="flex shrink-0 items-center gap-3 border-b border-amber-200 bg-amber-50/90 px-4 py-2 text-xs text-stone-700"
           >
             <Info size={19} className="shrink-0 text-sky-700" aria-hidden="true" />
+            {basicTools}
             <p className="min-w-0 flex-1 leading-5">
               <strong className="mr-2 font-semibold text-stone-800">읽기 전용</strong>
             </p>
             <Button
               variant="ghost"
               type="button"
-              onClick={() => {
+              onClick={async () => {
+                if (page?.signatures?.length && !(await signedEditDialog.confirm())) return;
                 setEditingEnabled(true);
               }}
               disabled={loading || busy}
               className="shrink-0 rounded-md border border-amber-300 bg-white px-3 py-1.5 font-medium text-stone-800 shadow-sm transition-colors hover:bg-amber-100 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-amber-700 disabled:opacity-40"
             >
-              편집 사용
+              <Pencil size={16} aria-hidden="true" /> 편집 사용
             </Button>
           </div>
         )}
@@ -1405,6 +1371,7 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
                   <span>다른 파일 열기</span>
                 </Button>
               </div>
+              {basicTools}
               <div className="ribbon-group">
                 <div className="flex flex-1 items-center gap-1">
                   <IconButton
@@ -1420,71 +1387,9 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
                     onClick={() => void run({ kind: "redo" })}
                   />
                 </div>
-                <span className="ribbon-caption">작업 기록</span>
-              </div>
-              <div className="ribbon-group">
-                <input
-                  ref={imageInput}
-                  type="file"
-                  accept="image/png,image/jpeg,image/webp,image/bmp,image/gif"
-                  aria-label="삽입할 이미지 파일"
-                  className="hidden"
-                  tabIndex={-1}
-                  onChange={(event) => {
-                    const image = event.currentTarget.files?.[0];
-                    event.currentTarget.value = "";
-                    if (image)
-                      void insertGraphic(async () => ({
-                        kind: "pasteImage",
-                        png: await clipboardImage(image),
-                      }));
-                  }}
-                />
-                <div className="flex flex-1 items-center gap-1">
-                  <Button
-                    variant="ghost"
-                    type="button"
-                    className="ribbon-command"
-                    disabled={busy || loading || preparingEdit || !page}
-                    title="이미지 파일 선택 (PNG, JPG, WEBP, BMP, GIF)"
-                    onClick={() => imageInput.current?.click()}
-                  >
-                    <ImagePlus size={23} aria-hidden="true" />
-                    <span>이미지 삽입</span>
-                  </Button>
-                  <Button
-                    variant="ghost"
-                    type="button"
-                    className="ribbon-command"
-                    disabled={busy || loading || preparingEdit || !page}
-                    aria-label="이미지·도형 붙여넣기"
-                    title="클립보드의 이미지·도형 붙여넣기 (Ctrl+V)"
-                    onClick={() => void insertGraphic(readGraphicClipboard)}
-                  >
-                    <ClipboardPaste size={23} aria-hidden="true" />
-                    <span>붙여넣기</span>
-                  </Button>
-                </div>
-                <span className="ribbon-caption">이미지</span>
               </div>
               <div className="ribbon-group">
                 <div className="flex flex-1 items-center gap-1">
-                  {session && (
-                    <Button
-                      variant="ghost"
-                      type="button"
-                      className="ribbon-command"
-                      disabled={busy || loading || preparingEdit || !page}
-                      onClick={async () => {
-                        if (!(await commitDraft())) return;
-                        setEditError(null);
-                        setToolboxOpen(true);
-                      }}
-                    >
-                      <Archive size={23} aria-hidden="true" />
-                      <span>내 도구함</span>
-                    </Button>
-                  )}
                   <Button
                     variant="ghost"
                     type="button"
@@ -1493,7 +1398,6 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
                     title={session ? "워터마크" : "워터마크 · 로그인 필요"}
                     onClick={() => {
                       setEditError(null);
-                      setWatermarkText(undefined);
                       setStampDialog("watermark");
                     }}
                   >
@@ -1515,20 +1419,24 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
                     <span>전자서명</span>
                   </Button>
                 </div>
-                <span className="ribbon-caption">문서 표시</span>
               </div>
               <div className="ml-auto flex shrink-0 items-center gap-2 pl-2">
                 <IconButton
                   icon={Save}
-                  label="새 PDF로 저장"
+                  label="저장"
                   disabled={busy || loading || (!unsavedDraft && !editState.dirty)}
                   onClick={() => void saveAs()}
                   className="bg-emerald-900 text-white hover:bg-emerald-800"
                 />
-                <span className="ribbon-caption">새 PDF 저장</span>
               </div>
             </div>
             <div className="editor-text-tools flex h-12 items-center gap-3 overflow-x-auto border-t border-stone-100 bg-stone-50/60 px-4">
+              <SavedToolPicker
+                kind="text"
+                label="보관한 문구 복사"
+                disabled={busy || loading || !page}
+                onPick={useLibraryTool}
+              />
               <div className="flex shrink-0 items-center gap-2">
                 <label className="flex flex-1 items-center gap-2 text-stone-600">
                   <Type size={18} aria-hidden="true" />
@@ -1736,6 +1644,7 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
                             className="self-start rounded border px-2 py-1 text-xs aria-pressed:bg-emerald-50 aria-pressed:text-emerald-800 disabled:opacity-40"
                             title="입력에 맞춰 너비가 늘어나고 페이지 오른쪽 끝에서 줄바꿈됩니다."
                           >
+                            <MoveHorizontal size={16} aria-hidden="true" />{" "}
                             {blockSize === null ? "너비 자동 확장 켜짐" : "너비 자동 확장"}
                           </Button>
                         )}
@@ -1810,9 +1719,10 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
                               .map((name) => name.replace(/^[A-Z]{6}\+/, "")),
                           ),
                         ];
-                        setNotice(
-                          `원본 글꼴: ${names.join(", ")}. PDF 내장 글꼴을 우선 사용합니다. 새 글자가 없거나 내장 글꼴을 재사용할 수 없으면 ‘원본 글꼴 불러오기’로 동일한 이름·굵기의 TTF/TTC를 선택하세요. Windows 설치는 필요하지 않습니다. 다른 글꼴로 자동 교체하지 않으며, 초록색 표시가 모든 새 문자의 지원을 보장하지는 않습니다.`,
-                        );
+                        setNotice({
+                          kind: "info",
+                          text: `원본 글꼴: ${names.join(", ")}. PDF 내장 글꼴을 우선 사용합니다. 새 글자가 없거나 내장 글꼴을 재사용할 수 없으면 ‘원본 글꼴 불러오기’로 동일한 이름·굵기의 TTF/TTC를 선택하세요. Windows 설치는 필요하지 않습니다. 다른 글꼴로 자동 교체하지 않으며, 초록색 표시가 모든 새 문자의 지원을 보장하지는 않습니다.`,
+                        });
                       }}
                     />
                   )}
@@ -1859,7 +1769,6 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
                   )}
                 </div>
               </div>
-              <KeyboardHelp />
               <span className="sr-only" role="status">
                 {busy
                   ? "문서를 처리하고 있습니다…"
@@ -1867,7 +1776,7 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
                       selected.fontChangeBlocked !== null &&
                       !selected.group?.canFlow
                     ? selected.editBlocked
-                    : "클릭: 선택 · 더블 클릭: 내용 수정 · 빈 곳 드래그: 여러 블록 선택 · Ctrl+휠: 확대/축소 · 휠: 스크롤"}
+                    : null}
               </span>
             </div>
           </div>
@@ -1879,7 +1788,7 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
           >
             <span>{fontWarning}</span>
             <Button variant="ghost" className="dialog-button" onClick={() => resolveFont()}>
-              반영 방법 선택
+              <Type size={16} aria-hidden="true" /> 글꼴 선택
             </Button>
           </div>
         )}
@@ -1889,12 +1798,8 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
           </p>
         )}
         <MessageDialog
-          message={discardOpen || stampDialog || toolboxOpen || readingText ? null : message}
-          title={
-            editError || selectionError || error || pageInputError || fontError
-              ? "확인해 주세요"
-              : "알림"
-          }
+          message={discardOpen || stampDialog || textPageIndex !== null ? null : message}
+          kind={failure ? "error" : (notice?.kind ?? "warning")}
           onDismiss={() => {
             setEditError(null);
             setNotice(null);
@@ -1908,69 +1813,132 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
                 : undefined
           }
         />
-        <section
-          ref={pageArea}
-          aria-label="PDF 페이지"
-          aria-busy={loading}
-          className="relative min-h-0 min-w-0 flex-1 overflow-auto p-6 [overflow-anchor:none]"
-        >
-          {loading && (
-            <div className="absolute right-3 top-3 z-20 w-72 max-w-[calc(100%-1.5rem)] rounded-xl bg-white p-4 text-sm text-stone-600 shadow-sm">
-              <div className="mb-2 flex items-center justify-between gap-4" role="status">
-                <span>{pageIndex + 1}페이지 준비 중</span>
-                <span>{loadPercent}%</span>
-              </div>
-              <progress
-                aria-label="페이지 로딩 진행률"
-                max={100}
-                value={loadPercent}
-                className="h-2 w-full accent-emerald-700"
-              />
-            </div>
-          )}
-          {error && (
-            <IconButton
-              icon={RotateCcw}
-              label="페이지 다시 불러오기"
-              onClick={() => setRetry((n) => n + 1)}
-            />
-          )}
-          {page && (
+        <ActionContextMenu
+          label="PDF 페이지 작업"
+          items={
             <>
-              <ZoomSurface
-                key={`${file.id}:${pageIndex}`}
-                width={page.width}
-                height={page.height}
-                targetWidth={(800 * zoom) / 100}
-                viewport={pageArea}
-                zoomPoint={zoomPoint}
+              {editingEnabled && (
+                <>
+                  <ContextMenuItem
+                    disabled={busy || loading || unsavedDraft || !editState.canUndo}
+                    onSelect={() => void run({ kind: "undo" })}
+                  >
+                    <Undo2 />
+                    실행 취소
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    disabled={busy || loading || unsavedDraft || !editState.canRedo}
+                    onSelect={() => void run({ kind: "redo" })}
+                  >
+                    <Redo2 />
+                    다시 실행
+                  </ContextMenuItem>
+                  <ContextMenuSeparator />
+                </>
+              )}
+              <ContextMenuItem
+                disabled={!page || loading || busy || unsavedDraft}
+                onSelect={() => setTextPageIndex(pageIndex)}
               >
-                <TextPage
-                  active={active}
-                  fontGeneration={fontGeneration}
-                  page={page}
-                  name={file.name}
-                  selected={selected}
-                  disabled={!active || busy || loading || error !== null}
-                  editingEnabled={editingEnabled}
-                  mode={selectionMode}
-                  onGraphicEdit={graphicEdit}
-                  blockSize={blockSize}
-                  onResize={setBlockSize}
-                  inlineEditing={inlineEditing}
-                  onBeginEdit={beginTextEdit}
-                  onMove={moveText}
-                  onDelete={deleteText}
-                  draft={draft}
-                  onDraft={setDraft}
-                  onSelect={selectText}
-                  onApply={applyText}
-                  onComposition={composeText}
-                />
-              </ZoomSurface>
+                <ScanText />
+                글자 추출
+              </ContextMenuItem>
+              <ContextMenuItem
+                disabled={!page || loading || busy || unsavedDraft}
+                onSelect={() => setMaskPage(page)}
+              >
+                <ScanLine />
+                마스킹
+              </ContextMenuItem>
+              <ContextMenuSeparator />
+              <ContextMenuItem
+                disabled={pageCount === null}
+                onSelect={() => setSidebarOpen((value) => !value)}
+              >
+                {sidebarOpen ? <PanelLeftClose /> : <PanelLeftOpen />}
+                {sidebarOpen ? "페이지 목록 접기" : "페이지 목록 펼치기"}
+              </ContextMenuItem>
+              <ContextMenuItem
+                disabled={loading || busy || zoom === 100}
+                onSelect={() => {
+                  zoomPoint.current = null;
+                  setZoom(100);
+                }}
+              >
+                <RotateCcw />
+                확대 비율 100%로 복원
+              </ContextMenuItem>
+              {editingEnabled && (
+                <>
+                  <ContextMenuSeparator />
+                  <ContextMenuItem
+                    disabled={busy || loading || (!unsavedDraft && !editState.dirty)}
+                    onSelect={() => void saveAs()}
+                  >
+                    <Save />
+                    저장
+                  </ContextMenuItem>
+                </>
+              )}
             </>
-          )}
-        </section>
+          }
+        >
+          <section
+            ref={bindViewport}
+            tabIndex={0}
+            aria-label="PDF 페이지"
+            aria-busy={loading}
+            className="relative min-h-0 min-w-0 flex-1 overflow-auto p-6 [overflow-anchor:none]"
+          >
+            {loading && (
+              <div className="absolute right-3 top-3 z-20 w-72 max-w-[calc(100%-1.5rem)]">
+                <PageLoading page={pageIndex + 1} percent={loadPercent} />
+              </div>
+            )}
+            {error && (
+              <IconButton
+                icon={RotateCcw}
+                label="페이지 다시 불러오기"
+                onClick={() => setRetry((n) => n + 1)}
+              />
+            )}
+            {page && (
+              <>
+                <ZoomSurface
+                  key={`${file.id}:${pageIndex}`}
+                  width={page.width}
+                  height={page.height}
+                  targetWidth={(800 * zoom) / 100}
+                  viewport={pageArea}
+                  zoomPoint={zoomPoint}
+                >
+                  <TextPage
+                    active={active}
+                    fontGeneration={fontGeneration}
+                    page={page}
+                    name={file.name}
+                    selected={selected}
+                    disabled={!active || busy || loading || error !== null}
+                    editingEnabled={editingEnabled}
+                    mode={selectionMode}
+                    onGraphicEdit={graphicEdit}
+                    blockSize={blockSize}
+                    onResize={setBlockSize}
+                    inlineEditing={inlineEditing}
+                    onBeginEdit={beginTextEdit}
+                    onMove={moveText}
+                    onDelete={deleteText}
+                    draft={draft}
+                    onDraft={setDraft}
+                    onSelect={selectText}
+                    onApply={applyText}
+                    onComposition={composeText}
+                  />
+                </ZoomSurface>
+              </>
+            )}
+          </section>
+        </ActionContextMenu>
         <nav
           aria-label="페이지 탐색"
           className="absolute bottom-4 right-5 z-20 rounded-full border border-stone-200 bg-white/95 p-1.5 shadow-lg backdrop-blur"
@@ -1996,7 +1964,7 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
               value={pageInput}
               disabled={busy || loading || clearing || pageCount === null}
               aria-invalid={pageInputError !== null}
-              aria-describedby={pageInputError ? "page-input-error" : "page-input-help"}
+              aria-describedby={pageInputError ? "page-input-error" : undefined}
               onFocus={(event) => event.currentTarget.select()}
               onChange={(event) => {
                 setPageInput(event.target.value);
@@ -2019,9 +1987,6 @@ export function PdfPreview({ file, active = true }: { file: FileInfo; active?: b
             />
             <span className="text-stone-500" aria-label={`전체 ${pageCount ?? "확인 중"}페이지`}>
               / {pageCount ?? "…"}
-            </span>
-            <span id="page-input-help" className="sr-only">
-              페이지 번호를 입력하고 Enter를 누르세요. Escape로 현재 번호를 복원합니다.
             </span>
             <span className="sr-only" aria-live="polite">
               {pageIndex + 1} / {pageCount ?? "…"}

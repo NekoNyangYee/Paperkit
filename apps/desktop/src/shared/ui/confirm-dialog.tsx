@@ -1,23 +1,23 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { CircleAlert } from "lucide-react";
+import { ActionButton, type ButtonAction } from "./action-button";
+import { DialogFeedbackIcon, type ConfirmKind } from "./dialog-feedback";
 import {
   AlertDialog,
   AlertDialogContent,
   AlertDialogTitle,
   AlertDialogDescription,
   AlertDialogAction,
-  AlertDialogCancel,
 } from "./alert-dialog";
 export function useConfirmDialog({
+  kind,
   title,
   description,
-  confirmLabel = "초기화",
-  cancelLabel = "취소",
+  action = kind,
 }: {
+  kind: ConfirmKind;
   title: string;
   description: string;
-  confirmLabel?: string;
-  cancelLabel?: string;
+  action?: ButtonAction;
 }) {
   const [open, setOpen] = useState(false);
   const pending = useRef<{ resolve: (value: boolean) => void; promise: Promise<boolean> } | null>(
@@ -60,27 +60,18 @@ export function useConfirmDialog({
           focus.current?.focus();
         }}
       >
-        <CircleAlert className="mb-4 text-amber-600" aria-hidden="true" />
+        <DialogFeedbackIcon kind={kind} />
         <AlertDialogTitle className="text-lg font-semibold">{title}</AlertDialogTitle>
         <AlertDialogDescription className="mt-3 text-sm leading-6 text-stone-600">
           {description}
         </AlertDialogDescription>
         <div className="mt-6 flex justify-end gap-2">
-          <AlertDialogCancel
-            aria-label={cancelLabel}
-            title={cancelLabel}
-            className="dialog-button"
-            onClick={() => finish(false)}
-          >
-            {cancelLabel}
-          </AlertDialogCancel>
-          <AlertDialogAction
-            aria-label={confirmLabel}
-            title={confirmLabel}
-            className="dialog-button bg-red-700 text-white"
-            onClick={() => finish(true)}
-          >
-            {confirmLabel}
+          <AlertDialogAction asChild>
+            <ActionButton
+              action={action}
+              onClick={() => finish(true)}
+              className={`text-white ${{ delete: "bg-red-700", reset: "bg-indigo-700", discard: "bg-amber-800" }[kind]}`}
+            />
           </AlertDialogAction>
         </div>
       </AlertDialogContent>

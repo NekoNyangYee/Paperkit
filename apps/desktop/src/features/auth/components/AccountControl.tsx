@@ -44,7 +44,7 @@ function ProfileAvatar({
   const showPhoto = !!source && failedSource !== source;
   return (
     <div
-      className={`mx-auto flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-stone-100 text-stone-400 ${compact ? "size-6" : "size-14"}`}
+      className={`mx-auto flex shrink-0 items-center justify-center overflow-hidden rounded-full bg-violet-100 text-violet-700 ring-1 ring-violet-200 ${compact ? "size-6" : "size-14"}`}
       aria-hidden={compact || undefined}
       role={showPhoto ? undefined : "img"}
       aria-label={showPhoto ? undefined : "기본 프로필"}
@@ -96,7 +96,11 @@ export function AccountControl() {
               <ProfileAvatar key={session.user.id} name={profileName} source={picture} compact />
             </Button>
           ) : (
-            <IconButton icon={UserRound} label="로그인" className="shrink-0" />
+            <IconButton
+              icon={UserRound}
+              label="로그인"
+              className="shrink-0 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
+            />
           )}
         </PopoverTrigger>
         <PopoverContent
@@ -110,7 +114,7 @@ export function AccountControl() {
           }}
           className="w-72 max-w-[calc(100vw-24px)] space-y-4 p-4"
         >
-          <div className="space-y-3 text-center">
+          <div className="space-y-2 rounded-xl bg-violet-50/70 px-3 py-4 text-center">
             <ProfileAvatar key={session?.user.id ?? "guest"} name={profileName} source={picture} />
             <h2 id={titleId} className="break-words text-sm font-semibold text-stone-900">
               {session ? profileName : ready ? "로그인이 필요합니다" : "로그인 확인 중"}
@@ -122,8 +126,8 @@ export function AccountControl() {
           </div>
           <div className="flex items-center gap-2 border-t border-stone-100 pt-3">
             <Button
-              variant="ghost"
-              className="flex-1 gap-2"
+              variant="outline"
+              className="flex-1 gap-2 border-stone-300"
               onClick={() => {
                 setOpen(false);
                 setAboutOpen(true);
@@ -136,7 +140,7 @@ export function AccountControl() {
                 variant="outline"
                 disabled={busy}
                 onClick={() => void signOut()}
-                className="flex-1 gap-2"
+                className="flex-1 gap-2 border-rose-200 bg-rose-50 text-rose-800 hover:bg-rose-100"
               >
                 <LogOut size={16} />
                 로그아웃
@@ -146,7 +150,7 @@ export function AccountControl() {
                 variant="outline"
                 disabled={!signingIn && (busy || !ready)}
                 onClick={() => void (signingIn ? cancelGoogleLogin() : signInWithGoogle())}
-                className="flex-1 gap-2"
+                className="flex-1 gap-2 border-emerald-200 bg-emerald-50 text-emerald-800 hover:bg-emerald-100"
                 aria-label={signingIn ? "로그인 취소" : "Google로 로그인"}
               >
                 {signingIn ? <X size={17} /> : <LogIn size={17} />}

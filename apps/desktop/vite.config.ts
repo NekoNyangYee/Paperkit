@@ -4,6 +4,8 @@ import tailwindcss from "@tailwindcss/vite";
 import { fileURLToPath } from "node:url";
 
 export default defineConfig({
+  // All shipped assets are imports. Exclude the former generated public/ocr cache.
+  publicDir: false,
   envDir: fileURLToPath(new URL("../../", import.meta.url)),
   plugins: [react(), tailwindcss()],
   resolve: { alias: { "@": fileURLToPath(new URL("./src", import.meta.url)) } },

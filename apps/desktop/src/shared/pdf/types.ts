@@ -143,7 +143,14 @@ export interface FontInfo {
   source?: "bundled" | "installed";
 }
 
+export interface SignatureReport {
+  signer: string | null;
+  integrity: "matches" | "mismatch" | "unverified";
+  trust: "trusted" | "untrusted" | "revoked" | "unknown";
+  laterBytes: boolean | null;
+}
 export interface PreviewPage {
+  signatures?: SignatureReport[];
   recovered?: boolean;
   fileId: string;
   pageCount: number;

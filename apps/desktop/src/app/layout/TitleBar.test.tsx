@@ -23,7 +23,7 @@ it("keeps app info outside the drag region and requests close without destroying
   fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
   fireEvent.click(screen.getByRole("button", { name: "창 최소화" }));
   fireEvent.click(screen.getByRole("button", { name: "창 최대화" }));
-  fireEvent.click(screen.getByRole("button", { name: "앱 닫기" }));
+  fireEvent.click(screen.getByRole("button", { name: "앱 종료" }));
   await waitFor(() => expect(controls.close).toHaveBeenCalledTimes(1));
   expect(controls.minimize).toHaveBeenCalledTimes(1);
   expect(controls.toggleMaximize).toHaveBeenCalledTimes(1);
@@ -48,7 +48,7 @@ it("syncs maximize and restore icons with native window state", async () => {
     screen.getByRole("button", { name: "창 최대화" }).querySelector(".lucide-square"),
   ).toBeTruthy();
   expect(
-    screen.getByRole("button", { name: "앱 닫기" }).querySelector("svg")?.getAttribute("width"),
+    screen.getByRole("button", { name: "앱 종료" }).querySelector("svg")?.getAttribute("width"),
   ).toBe("22");
   view.unmount();
   expect(stop).toHaveBeenCalledOnce();

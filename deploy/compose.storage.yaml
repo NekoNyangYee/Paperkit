@@ -1,0 +1,19 @@
+# Merge with compose.yaml on the Linux Docker host.
+services:
+  backend:
+    entrypoint: ["/bin/sh", "/usr/local/bin/paperkit-storage-start"]
+    environment:
+      PAPERKIT_STORAGE_MAX_GIB: ${PAPERKIT_STORAGE_MAX_GIB:-12}
+    labels:
+      io.paperkit.storage: bounded
+    volumes:
+      - type: bind
+        source: ${PAPERKIT_STORAGE_ROOT:?Set PAPERKIT_STORAGE_ROOT}/data
+        target: /data
+        bind:
+          create_host_path: false
+      - type: bind
+        source: ${PAPERKIT_STORAGE_ROOT:?Set PAPERKIT_STORAGE_ROOT}/backups
+        target: /backup
+        bind:
+          create_host_path: false

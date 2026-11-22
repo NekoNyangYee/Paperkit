@@ -62,7 +62,7 @@ vi.mock("@/features/pdf-editor/components/stamps/SignatureDialog", () => ({
           if (await onApply([7, 8, 9])) onClose();
         }}
       >
-        서명 생성
+        적용
       </button>
     </div>
   ),
@@ -115,6 +115,40 @@ it("copies a selected block and pastes text into its draft without prematurely e
   );
   expect(mocks.invoke.mock.calls.some(([cmd]) => cmd === "edit_document")).toBe(false);
 });
+
+it.each([false, true])(
+  "replaces only the chosen PDF text with two literal stars (partial %s)",
+  async (partial) => {
+    mocks.invoke.mockImplementation(async (command, args) => {
+      if (command === "render_selected_page")
+        return { ...page(args.pageIndex, args.width), text: { objects: [object], warning: null } };
+      if (command === "editing_background") return "data:image/png;base64,AA==";
+      if (command === "edit_document")
+        return { revision: 1, dirty: true, canUndo: true, canRedo: false };
+    });
+    render(<PdfPreview file={file} />);
+    await enableEditing();
+    const block = await screen.findByRole("button", { name: "텍스트 선택: Hello World" });
+    if (partial) {
+      fireEvent.doubleClick(block);
+      const editor = await screen.findByRole("textbox", { name: "내용" });
+      const node = document.createTreeWalker(editor, NodeFilter.SHOW_TEXT).nextNode()!;
+      const range = document.createRange();
+      range.setStart(node, 0);
+      range.setEnd(node, 5);
+      window.getSelection()!.removeAllRanges();
+      window.getSelection()!.addRange(range);
+    } else fireEvent.click(block);
+    fireEvent.click(screen.getByRole("button", { name: "별표 대체" }));
+    await waitFor(() =>
+      expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
+        fileId: file.id,
+        revision: 0,
+        action: { kind: "replace", page: 0, object: 0, text: partial ? "** World" : "**" },
+      }),
+    );
+  },
+);
 
 it("deletes a selected text block with Delete but protects typing and toolbar controls", async () => {
   mocks.invoke.mockImplementation(async (command, args) => {
@@ -273,55 +307,42 @@ const object = {
   fontChangeBlocked: null,
 };
 
-it.each(["image", "signature"] as const)(
-  "inserts a saved toolbox %s on the active page and keeps failed insertions open",
-  async (kind) => {
-    useToolStore.setState({
-      owner: "user-id",
-      tools: [
-        {
-          id: "logo",
-          name: "회사 로고",
-          kind,
-          content: "data:image/png;base64,AQID",
-          createdAt: 1,
-        },
-      ],
-      loading: false,
-      error: null,
-    });
-    render(<PdfPreview file={file} />);
-    await enableEditing();
-    fireEvent.click(screen.getByRole("button", { name: "내 도구함" }));
-    fireEvent.click(await screen.findByRole("button", { name: "회사 로고 문서에 넣기" }));
-    await waitFor(() =>
-      expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
-        fileId: file.id,
-        revision: 0,
-        action: {
-          kind: kind === "signature" ? "addSignature" : "pasteImage",
-          page: 0,
-          png: [1, 2, 3],
-        },
-      }),
-    );
-    expect(
-      await screen.findByText(
-        kind === "signature"
-          ? "서명을 넣지 못했어요. 그린 서명을 확인한 뒤 다시 눌러 주세요."
-          : "변경을 적용하지 못했어요. 입력한 내용을 확인한 뒤 다시 시도해 주세요.",
-      ),
-    ).toBeTruthy();
-    expect(screen.getByRole("dialog", { name: "내 도구함" })).toBeTruthy();
-    mocks.invoke.mockImplementation(async (command, args) => {
-      if (command === "render_selected_page") return page(args.pageIndex, args.width);
-      if (command === "edit_document")
-        return { revision: 1, dirty: true, canUndo: true, canRedo: false };
-    });
-    fireEvent.click(screen.getByRole("button", { name: "회사 로고 문서에 넣기" }));
-    await waitFor(() => expect(screen.queryByRole("dialog", { name: "내 도구함" })).toBeNull());
-  },
-);
+it("offers the phrase picker and keeps the stamp and image libraries out of the ribbon", async () => {
+  const writeText = vi.fn().mockResolvedValue(undefined);
+  vi.stubGlobal("navigator", Object.assign(Object.create(navigator), { clipboard: { writeText } }));
+  useToolStore.setState({
+    owner: "user-id",
+    tools: [
+      {
+        id: "logo",
+        name: "작은 로고",
+        kind: "image",
+        content: "data:image/png;base64,AQID",
+        createdAt: 1,
+      },
+      {
+        id: "phrase",
+        name: "납품 안내",
+        kind: "text",
+        content: "납품 일정을 확인해 주세요.",
+        createdAt: 2,
+      },
+    ],
+  });
+  mocks.invoke.mockImplementation(async (command, args) => {
+    if (command === "render_selected_page") return page(args.pageIndex, args.width);
+    if (command === "edit_document")
+      return { revision: 1, dirty: true, canUndo: true, canRedo: false };
+  });
+  render(<PdfPreview file={file} />);
+  await enableEditing();
+  fireEvent.click(screen.getByRole("button", { name: "보관한 문구 복사" }));
+  fireEvent.click(await screen.findByRole("button", { name: "납품 안내" }));
+  await waitFor(() => expect(writeText).toHaveBeenCalledWith("납품 일정을 확인해 주세요."));
+  expect(screen.queryByRole("button", { name: "내 도구함" })).toBeNull();
+  expect(screen.queryByRole("button", { name: "보관한 이미지" })).toBeNull();
+  expect(screen.queryByText("기본 기능")).toBeNull();
+});
 
 it.each(["전자서명", "워터마크"])(
   "requires login for %s and resumes after signing in",
@@ -371,7 +392,7 @@ it("applies a watermark from the toolbar with the current revision and enables u
   fireEvent.click(screen.getByRole("button", { name: "워터마크" }));
   fireEvent.click(await screen.findByRole("switch", { name: "워터마크 사용" }));
   await screen.findByRole("img", { name: "워터마크 미리보기" });
-  fireEvent.click(screen.getByRole("button", { name: "워터마크 적용" }));
+  fireEvent.click(screen.getByRole("button", { name: "적용" }));
   await waitFor(() =>
     expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
       fileId: file.id,
@@ -419,7 +440,7 @@ it("inserts a generated signature on the active page and keeps the dialog on fai
     ),
   );
   fireEvent.click(screen.getByRole("button", { name: "전자서명" }));
-  fireEvent.click(screen.getByRole("button", { name: "서명 생성" }));
+  fireEvent.click(screen.getByRole("button", { name: "적용" }));
   await screen.findByText("변경을 적용하지 못했어요. 입력한 내용을 확인한 뒤 다시 시도해 주세요.");
   expect(screen.getByRole("dialog", { name: "서명 입력" })).toBeTruthy();
   expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
@@ -428,107 +449,46 @@ it("inserts a generated signature on the active page and keeps the dialog on fai
     action: { kind: "addSignature", page: 1, png: [7, 8, 9] },
   });
   failure = false;
-  fireEvent.click(screen.getByRole("button", { name: "서명 생성" }));
+  fireEvent.click(screen.getByRole("button", { name: "적용" }));
   await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
 });
 
-it("opens the image file picker from the ribbon and can insert the same file again", async () => {
-  let revision = 0;
-  mocks.invoke.mockImplementation(async (command, args) => {
-    const state = () => ({ revision, dirty: revision > 0, canUndo: revision > 0, canRedo: false });
-    if (command === "render_selected_page")
-      return { ...page(args.pageIndex, args.width), state: state() };
-    if (command === "edit_document") {
-      revision++;
-      return state();
-    }
-  });
-  render(<PdfPreview file={file} />);
-  await enableEditing();
-  const button = screen.getByRole("button", { name: "이미지 삽입" });
-  expect(screen.getByLabelText("편집 도구").contains(button)).toBe(true);
-  expect(
-    screen
-      .getByLabelText("편집 도구")
-      .contains(screen.getByRole("button", { name: "이미지·도형 붙여넣기" })),
-  ).toBe(true);
-  const input = screen.getByLabelText("삽입할 이미지 파일") as HTMLInputElement;
-  const picker = vi.spyOn(input, "click").mockImplementation(() => {});
-  fireEvent.click(button);
-  expect(picker).toHaveBeenCalledOnce();
-  fireEvent.change(input, { target: { files: [] } });
-  expect(mocks.invoke.mock.calls.some(([command]) => command === "edit_document")).toBe(false);
-  const image = new File([new Uint8Array([1, 2, 3, 4])], "picture.png", { type: "image/png" });
-  Object.defineProperty(image, "arrayBuffer", {
-    value: async () => new Uint8Array([1, 2, 3, 4]).buffer,
-  });
-  for (const expectedRevision of [0, 1]) {
-    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
-    fireEvent.change(input, { target: { files: [image] } });
+it.each(["image", "graphic"])(
+  "pastes an external image or a copied graphic into the editor (%s)",
+  async (kind) => {
+    mocks.invoke.mockImplementation(async (command, args) => {
+      if (command === "render_selected_page") return page(args.pageIndex, args.width);
+      if (command === "edit_document")
+        return { revision: 1, dirty: true, canUndo: true, canRedo: false };
+    });
+    render(<PdfPreview file={file} />);
+    await enableEditing();
+    expect(screen.queryByRole("button", { name: "이미지 삽입" })).toBeNull();
+    const source = [37, 80, 68, 70];
+    const image = new File([Uint8Array.from(source)], "clipboard.png", { type: "image/png" });
+    Object.defineProperty(image, "arrayBuffer", {
+      value: async () => Uint8Array.from(source).buffer,
+    });
+    const marker = kind === "graphic" ? rememberGraphic(source) : "";
+    fireEvent.paste(document, {
+      clipboardData: {
+        getData: () => marker,
+        items: [],
+        files: kind === "image" ? [image] : [],
+      },
+    });
     await waitFor(() =>
       expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
         fileId: file.id,
-        revision: expectedRevision,
-        action: { kind: "pasteImage", page: 0, png: [1, 2, 3, 4] },
+        revision: 0,
+        action:
+          kind === "graphic"
+            ? { kind: "pasteGraphic", page: 0, source }
+            : { kind: "pasteImage", page: 0, png: source },
       }),
     );
-    expect(input.value).toBe("");
-    await waitFor(() => expect((button as HTMLButtonElement).disabled).toBe(false));
-  }
-});
-
-it("reports image file read failures without modifying the PDF", async () => {
-  render(<PdfPreview file={file} />);
-  await enableEditing();
-  const image = new File([], "broken.png", { type: "image/png" });
-  Object.defineProperty(image, "arrayBuffer", {
-    value: async () => {
-      throw new Error("이미지 파일을 읽지 못했습니다.");
-    },
-  });
-  fireEvent.change(screen.getByLabelText("삽입할 이미지 파일"), { target: { files: [image] } });
-  expect(await screen.findByRole("alert")).toHaveProperty(
-    "textContent",
-    "이미지를 열지 못했어요. 다른 이미지 파일을 선택해 주세요.",
-  );
-  expect(mocks.invoke.mock.calls.some(([command]) => command === "edit_document")).toBe(false);
-  expect((screen.getByRole("button", { name: "이미지 삽입" }) as HTMLButtonElement).disabled).toBe(
-    false,
-  );
-});
-
-it("pastes copied PDF objects from the ribbon", async () => {
-  const marker = rememberGraphic([37, 80, 68, 70]);
-  vi.stubGlobal(
-    "navigator",
-    Object.create(navigator, {
-      clipboard: {
-        value: {
-          read: vi
-            .fn()
-            .mockResolvedValue([
-              { types: ["text/plain"], getType: async () => ({ text: async () => marker }) },
-            ]),
-        },
-      },
-    }),
-  );
-  mocks.invoke.mockImplementation(async (command, args) => {
-    if (command === "render_selected_page") return page(args.pageIndex, args.width);
-    if (command === "edit_document")
-      return { revision: 1, dirty: true, canUndo: true, canRedo: false };
-  });
-  render(<PdfPreview file={file} />);
-  await enableEditing();
-  fireEvent.click(screen.getByRole("button", { name: "이미지·도형 붙여넣기" }));
-  await waitFor(() =>
-    expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
-      fileId: file.id,
-      revision: 0,
-      action: { kind: "pasteGraphic", page: 0, source: [37, 80, 68, 70] },
-    }),
-  );
-});
+  },
+);
 
 it("duplicates and deletes pages with the current revision and keeps undo navigation in range", async () => {
   let count = 2,
@@ -1404,7 +1364,7 @@ it("edits a whole block in place, preserves the DOM during IME and saves after c
   expect(await screen.findByRole("textbox", { name: "내용" })).toBe(editor);
   fireEvent.compositionEnd(editor);
   fireEvent.input(editor, { target: { textContent: "New\ntext" } });
-  fireEvent.click(screen.getByRole("button", { name: "새 PDF로 저장" }));
+  fireEvent.click(screen.getByRole("button", { name: "저장" }));
   await waitFor(() =>
     expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
       fileId: file.id,
@@ -1431,7 +1391,7 @@ it("does not open a save dialog or discard inline input when block commit fails"
   fireEvent.doubleClick(await screen.findByRole("button", { name: "블록 선택: Hello World" }));
   const editor = await screen.findByRole("textbox", { name: "내용" });
   fireEvent.input(editor, { target: { textContent: "Keep this draft" } });
-  fireEvent.click(screen.getByRole("button", { name: "새 PDF로 저장" }));
+  fireEvent.click(screen.getByRole("button", { name: "저장" }));
   await screen.findByText("내용을 넣을 공간이 부족해요. 문단 너비나 글자 크기를 조절해 주세요.");
   expect(mocks.save).not.toHaveBeenCalled();
   expect(editor.textContent).toBe("Keep this draft");
@@ -1702,9 +1662,7 @@ it("selects a real object, applies an edit with its revision and refreshes page 
   fireEvent.input(await screen.findByRole("textbox", { name: "내용" }), {
     target: { textContent: "Hello PDF" },
   });
-  expect(
-    (screen.getByRole("button", { name: "새 PDF로 저장" }) as HTMLButtonElement).disabled,
-  ).toBe(false);
+  expect((screen.getByRole("button", { name: "저장" }) as HTMLButtonElement).disabled).toBe(false);
   fireEvent.click(screen.getByRole("button", { name: "적용" }));
   await screen.findByRole("button", { name: "텍스트 선택: Hello PDF" });
   expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
@@ -1876,9 +1834,7 @@ it("retains the draft when the original font lacks new glyphs, then imports the 
     mocks.invoke.mock.calls.some(([cmd]) => cmd === "editor_font" || cmd === "edit_document"),
   ).toBe(false);
   mocks.open.mockResolvedValue("C:/fonts/original.ttf");
-  fireEvent.click(
-    screen.getByRole("button", { name: "\uC6D0\uBCF8 \uAE00\uAF34 \uBD88\uB7EC\uC624\uAE30" }),
-  );
+  fireEvent.click(screen.getByRole("button", { name: "불러오기" }));
   await waitFor(() =>
     expect(mocks.invoke).toHaveBeenCalledWith("import_original_font", {
       path: "C:/fonts/original.ttf",
@@ -1948,13 +1904,13 @@ it("warns before applying missing glyphs and only substitutes after explicit cho
     { timeout: 3000 },
   );
   expect(mocks.invoke.mock.calls.some(([cmd]) => cmd === "edit_document")).toBe(false);
-  fireEvent.click(screen.getByRole("button", { name: "반영 방법 선택" }));
-  fireEvent.click(screen.getByRole("button", { name: "계속 편집" }));
+  fireEvent.click(screen.getByRole("button", { name: "글꼴 선택" }));
+  fireEvent.click(screen.getByRole("button", { name: "취소" }));
   expect(input.textContent).toBe("Hello 한글");
   fireEvent.keyDown(input, { key: "Enter" });
   await screen.findByRole("dialog", { name: "반영할 글꼴을 선택해 주세요" });
   await selectOption(screen.getByRole("combobox", { name: "대체 글꼴" }), "나눔고딕");
-  fireEvent.click(screen.getByRole("button", { name: "대체 글꼴로 반영" }));
+  fireEvent.click(screen.getByRole("button", { name: "적용" }));
   await waitFor(() =>
     expect(mocks.invoke).toHaveBeenCalledWith("edit_document", {
       fileId: file.id,
@@ -1988,21 +1944,21 @@ it("preserves dirty state on save cancellation/failure and clears it after verif
   render(<PdfPreview file={file} />);
   await screen.findByRole("img", { name: "example.pdf · 1페이지" });
   await enableEditing();
-  fireEvent.click(screen.getByRole("button", { name: "새 PDF로 저장" }));
+  fireEvent.click(screen.getByRole("button", { name: "저장" }));
   await waitFor(() => expect(mocks.save).toHaveBeenCalledTimes(1));
   await waitFor(() =>
-    expect(
-      (screen.getByRole("button", { name: "새 PDF로 저장" }) as HTMLButtonElement).disabled,
-    ).toBe(false),
+    expect((screen.getByRole("button", { name: "저장" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    ),
   );
   expect(mocks.invoke.mock.calls.some(([cmd]) => cmd === "edit_document")).toBe(false);
   mocks.save.mockResolvedValue("C:\\edited.pdf");
   mocks.invoke.mockRejectedValueOnce("이미 존재하는 파일입니다.");
-  fireEvent.click(screen.getByRole("button", { name: "새 PDF로 저장" }));
+  fireEvent.click(screen.getByRole("button", { name: "저장" }));
   await screen.findByRole("alert");
   expect(screen.getByText("저장하지 않은 변경 있음")).toBeTruthy();
   mocks.invoke.mockResolvedValueOnce({ revision: 1, dirty: false, canUndo: true, canRedo: false });
-  fireEvent.click(screen.getByRole("button", { name: "새 PDF로 저장" }));
+  fireEvent.click(screen.getByRole("button", { name: "저장" }));
   await screen.findByText("새 PDF로 저장하고 다시 열어 검증했습니다.");
   expect(screen.queryByText("저장하지 않은 변경 있음")).toBeNull();
 });
@@ -2028,7 +1984,7 @@ it("confirms native close and document close when unsaved changes exist", async 
   );
   render(<PdfPreview file={file} />);
   await screen.findByRole("img", { name: "example.pdf · 1페이지" });
-  fireEvent.click(screen.getByRole("button", { name: "닫기 · 다른 파일" }));
+  fireEvent.click(screen.getByRole("button", { name: "문서 나가기" }));
   await waitFor(() => expect(mocks.confirm).toHaveBeenCalledTimes(1));
   expect(mocks.invoke.mock.calls.some(([cmd]) => cmd === "clear_selection")).toBe(false);
   const event = { preventDefault: vi.fn() };
@@ -2201,25 +2157,6 @@ it("preserves a failed draft and commits it before a successful typed page jump"
   expect(screen.queryByRole("textbox", { name: "내용" })).toBeNull();
 });
 
-it("keeps a rejected text draft visible instead of opening the toolbox over it", async () => {
-  mocks.invoke.mockImplementation(async (command, args) => {
-    if (command === "render_selected_page")
-      return { ...page(args.pageIndex, args.width), text: { objects: [object], warning: null } };
-    if (command === "edit_document") throw "변경 결과를 검증하지 못했습니다.";
-  });
-  render(<PdfPreview file={file} />);
-  await enableEditing();
-  fireEvent.doubleClick(screen.getByRole("button", { name: "텍스트 선택: Hello World" }));
-  const draft = await screen.findByRole("textbox", { name: "내용" });
-  fireEvent.input(draft, { target: { textContent: "Hello" } });
-  fireEvent.click(screen.getByRole("button", { name: "내 도구함" }));
-  await waitFor(() =>
-    expect(mocks.invoke.mock.calls.some(([command]) => command === "edit_document")).toBe(true),
-  );
-  await waitFor(() => expect(screen.queryByRole("dialog", { name: "내 도구함" })).toBeNull());
-  expect(draft.textContent).toBe("Hello");
-});
-
 it("renders a new page on navigation and reuses it for dropdown zoom", async () => {
   render(<PdfPreview file={file} />);
   await screen.findByRole("img", { name: "example.pdf · 1페이지" });
@@ -2280,7 +2217,7 @@ it("closes while rendering and releases the document on unmount", async () => {
       : Promise.resolve({ revision: args?.revision ?? 1, file: null, error: null }),
   );
   const view = render(<PdfPreview file={file} />);
-  fireEvent.click(screen.getByRole("button", { name: "닫기 · 다른 파일" }));
+  fireEvent.click(screen.getByRole("button", { name: "문서 나가기" }));
   await waitFor(() => expect(useFileStore.getState().file).toBeNull());
   view.unmount();
   expect(mocks.invoke).toHaveBeenCalledWith("release_preview", { fileId: file.id });

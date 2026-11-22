@@ -38,6 +38,8 @@ interface AppStore {
   openedFileId: string | null;
   tabs: WorkspaceTab[];
   activeTabId: string;
+  tabNotice: string | null;
+  dismissTabNotice: () => void;
   newTab: () => void;
   activateTab: (id: string) => void;
   closeTab: (id: string) => Promise<void>;
@@ -97,6 +99,10 @@ export const useFileStore = create<AppStore>((set, get) => {
       if (existing) select(get().tabs, existing.id);
       else {
         const current = get().tabs.find((tab) => tab.id === get().activeTabId);
+        if (current?.file && !canAddTab()) {
+          showTabNotice();
+          return;
+        }
         const tab = { ...(current?.file ? emptyTab() : (current ?? emptyTab())), file };
         const tabs =
           current && !current.file
@@ -114,8 +120,20 @@ export const useFileStore = create<AppStore>((set, get) => {
         error: result.error,
       });
   };
+  const canAddTab = () =>
+    !!get().scopeOwner && get().scopeOwner === useAuthStore.getState().session?.user.id;
+  const showTabNotice = () =>
+    set({
+      tabNotice:
+        "새 탭을 추가하려면 로그인해 주세요. 현재 문서를 닫으면 이 탭에서 다른 PDF를 열 수 있습니다.",
+    });
   const run = async (operation: "check" | "clear", paths: string[] = []) => {
     if (!get().ready || useAuthStore.getState().busy) return;
+    const activeFile = get().tabs.find((tab) => tab.id === get().activeTabId)?.file;
+    if (operation === "check" && !canAddTab() && activeFile) {
+      if (paths.length !== 1 || activeFile.path !== paths[0]) showTabNotice();
+      return;
+    }
     const scope = scopeRequest;
     const owner = get().scopeOwner;
     const revision = get().revision + 1;
@@ -147,8 +165,11 @@ export const useFileStore = create<AppStore>((set, get) => {
     openedFileId: null,
     tabs: [initialTab],
     activeTabId: initialTab.id,
+    tabNotice: null,
+    dismissTabNotice: () => set({ tabNotice: null }),
     newTab: () => {
       if (!get().ready || get().phase === "checking" || useAuthStore.getState().busy) return;
+      if (!canAddTab()) return showTabNotice();
       const tab = emptyTab();
       select([...get().tabs, tab], tab.id);
     },
@@ -235,6 +256,7 @@ export const useFileStore = create<AppStore>((set, get) => {
       const blank = emptyTab();
       set({
         scopeOwner: owner,
+        tabNotice: null,
         ready: false,
         phase: "restoring",
         tabs: [blank],

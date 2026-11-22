@@ -4,11 +4,14 @@ vi.mock("@/shared/desktop/workspace", () => ({ writeWorkspace: async () => {} })
 vi.mock("@/shared/desktop/files", () => ({ closeFile: async () => {}, isDesktop: () => true }));
 import { useFileStore } from "@/features/file-input/model/file-store";
 import { WorkspaceTabs } from "./WorkspaceTabs";
+import { useAuthStore } from "@/features/auth/model/auth-store";
 
 beforeEach(() => {
+  useAuthStore.setState({ session: { user: { id: "owner" } } as never });
   useFileStore.setState({
     ...useFileStore.getInitialState(),
     ready: true,
+    scopeOwner: "owner",
     activeTabId: "a",
     tabs: [
       { id: "a", file: { id: "file-a", name: "a.pdf", path: "a.pdf", sizeBytes: 100 } },
@@ -21,6 +24,17 @@ afterEach(() => {
   vi.unstubAllGlobals();
 });
 
+it("keeps one guest tab and explains the login requirement for both entry points", () => {
+  useAuthStore.setState({ session: null });
+  useFileStore.setState({ scopeOwner: null, tabs: [{ id: "a", file: null }] });
+  render(<WorkspaceTabs />);
+  fireEvent.click(screen.getByRole("button", { name: "새 탭" }));
+  expect(screen.getByRole("button", { name: "Google로 로그인" })).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "취소" }));
+  fireEvent.keyDown(window, { ctrlKey: true, key: "t" });
+  expect(useFileStore.getState().tabs).toHaveLength(1);
+  expect(screen.getByRole("dialog", { name: "로그인이 필요합니다" })).toBeTruthy();
+});
 it("adds, switches and closes tabs with keyboard shortcuts", async () => {
   render(<WorkspaceTabs />);
   fireEvent.keyDown(window, { ctrlKey: true, key: "Tab" });
@@ -38,10 +52,19 @@ it("adds, switches and closes tabs with keyboard shortcuts", async () => {
 it("closes the requested tab without activating it or beginning a drag", async () => {
   render(<WorkspaceTabs />);
   await act(async () => {
-    fireEvent.click(screen.getByRole("button", { name: "b.pdf 탭 닫기" }));
+    fireEvent.click(screen.getByRole("button", { name: "b.pdf 탭 종료" }));
   });
   expect(useFileStore.getState().tabs.map((tab) => tab.id)).toEqual(["a"]);
   expect(useFileStore.getState().activeTabId).toBe("a");
+});
+
+it("closes the background tab addressed by its context menu", async () => {
+  render(<WorkspaceTabs />);
+  fireEvent.contextMenu(screen.getByRole("tab", { name: "b.pdf" }));
+  const item = await screen.findByRole("menuitem", { name: "탭 종료" });
+  expect(useFileStore.getState().activeTabId).toBe("a");
+  await act(async () => fireEvent.click(item));
+  expect(useFileStore.getState().tabs.map((tab) => tab.id)).toEqual(["a"]);
 });
 it("supports accessible arrow navigation and keyboard reordering", () => {
   render(<WorkspaceTabs />);

@@ -164,6 +164,7 @@ async function renderPageResponse(
     width: page.width,
     height: page.height,
     imageUrl: page.imageUrl,
+    signatures: Array.isArray(page.signatures) ? page.signatures : [],
     ...(typeof page.recovered === "boolean" ? { recovered: page.recovered } : {}),
     text,
     state: page.state,

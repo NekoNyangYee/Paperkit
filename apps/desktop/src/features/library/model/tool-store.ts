@@ -1,4 +1,5 @@
 import { create } from "zustand";
+import { useEffect } from "react";
 import { useAuthStore } from "@/features/auth/model/auth-store";
 import { getTools, libraryRequest, type LibraryTool, type NewTool } from "../lib/api";
 import { userErrorMessage } from "@/shared/lib/errors";
@@ -14,6 +15,15 @@ interface ToolState {
   add: (input: NewTool, owner: string) => Promise<void>;
   update: (id: string, input: NewTool, owner: string) => Promise<void>;
   remove: (id: string, owner: string) => Promise<void>;
+}
+export function useTools(enabled = true) {
+  const owner = useAuthStore((state) => state.session?.user.id);
+  const accessToken = useAuthStore((state) => state.session?.access_token);
+  const state = useToolStore();
+  useEffect(() => {
+    if (enabled && owner) void useToolStore.getState().load(owner);
+  }, [enabled, owner, accessToken]);
+  return { ...state, tools: state.owner === owner ? state.tools : [], owner };
 }
 let generation = 0;
 const loads = new Map<string, Promise<LibraryTool[]>>();

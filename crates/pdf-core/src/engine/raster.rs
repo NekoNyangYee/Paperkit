@@ -91,6 +91,7 @@ pub(super) fn render_loaded_page(
             .map_err(|_| PreviewError::RenderFailed)?;
     }
     Ok(RenderedPage {
+        signatures: Vec::new(),
         recovered: false,
         page_count,
         page_index: index,

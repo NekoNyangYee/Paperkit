@@ -113,14 +113,16 @@ it("offers temporary merged editing after a rectangle selection and hover action
     );
     const first = screen.getByRole("button", { name: "블록 선택: 첫째" });
     fireEvent.mouseEnter(first);
-    expect(screen.getByRole("button", { name: "블록 옮기기" })).toBeTruthy();
-    fireEvent.click(screen.getByRole("button", { name: "블록 삭제" }));
+    expect(screen.queryByRole("button", { name: "블록 옮기기" })).toBeNull();
+    fireEvent.contextMenu(first);
+    fireEvent.click(screen.getByRole("menuitem", { name: "블록 삭제" }));
     expect(remove).toHaveBeenCalledWith(expect.objectContaining({ text: "첫째" }));
     const area = screen.getByLabelText("텍스트 객체 선택");
     fireEvent.pointerDown(area, { clientX: 0, clientY: 0, button: 0 });
     fireEvent.pointerMove(area, { clientX: 100, clientY: 90 });
     fireEvent.pointerUp(area, { clientX: 100, clientY: 90 });
-    fireEvent.click(screen.getByRole("button", { name: "2개 블록 함께 편집" }));
+    fireEvent.contextMenu(first);
+    fireEvent.click(screen.getByRole("menuitem", { name: "2개 블록 함께 편집" }));
     expect(begin).toHaveBeenCalledWith(
       expect.objectContaining({ text: "첫째\n\n둘째", mergedGroups: [0, 1] }),
     );

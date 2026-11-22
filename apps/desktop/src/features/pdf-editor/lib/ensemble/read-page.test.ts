@@ -1,8 +1,7 @@
 import { beforeEach, expect, it, vi } from "vitest";
-const mocks = vi.hoisted(() => ({ invoke: vi.fn(), ocr: vi.fn() }));
-vi.mock("@tauri-apps/api/core", () => ({ invoke: mocks.invoke }));
-vi.mock("./tesseract", () => ({ recognizeLocal: mocks.ocr }));
 import { readPage } from "./read-page";
+const { invoke } = vi.hoisted(() => ({ invoke: vi.fn() }));
+vi.mock("@tauri-apps/api/core", () => ({ invoke, Channel: class {} }));
 const options = () => ({
   fileId: "file",
   revision: 4,
@@ -10,46 +9,48 @@ const options = () => ({
   signal: new AbortController().signal,
 });
 beforeEach(() => {
-  mocks.invoke.mockReset();
-  mocks.ocr.mockReset().mockResolvedValue({ text: "인식한 글자", confidence: 85 });
+  invoke.mockReset();
 });
-it("uses full-page native text including form text without loading OCR", async () => {
-  mocks.invoke.mockResolvedValue({ text: "폼 안의 글자", imageUrl: null });
-  await expect(readPage(options())).resolves.toEqual({ text: "폼 안의 글자", source: "pdfium" });
-  expect(mocks.ocr).not.toHaveBeenCalled();
+
+it.each([
+  { source: "pdfium", text: "문서" },
+  { source: "tesseract", text: "한글 English", confidence: 85 },
+])("displays the native $source result", async (result) => {
+  invoke.mockResolvedValue(result);
+  await expect(readPage(options())).resolves.toEqual(result);
+  expect(invoke).toHaveBeenCalledOnce();
 });
-it("routes only bitmap sources to local OCR and preserves confidence", async () => {
-  mocks.invoke.mockResolvedValue({ text: "", imageUrl: "data:image/png;base64,AQID" });
-  const input = options();
-  await expect(readPage(input)).resolves.toEqual({
-    text: "인식한 글자",
-    confidence: 85,
-    source: "tesseract",
-  });
-  expect(mocks.ocr).toHaveBeenCalledWith("data:image/png;base64,AQID", input.signal, undefined);
-  expect(mocks.invoke).toHaveBeenCalledWith("extract_page_text", {
-    fileId: "file",
-    revision: 4,
-    pageIndex: 2,
-    forceOcr: false,
-  });
-});
-it("does not bypass native permission errors with OCR", async () => {
-  mocks.invoke.mockRejectedValue(new Error("extraction prohibited"));
-  await expect(readPage(options())).rejects.toThrow("extraction prohibited");
-  expect(mocks.ocr).not.toHaveBeenCalled();
-});
-it("discards a canceled native result before creating any OCR worker", async () => {
+it("cancels the registered backend job on close, even when registration is late", async () => {
   const controller = new AbortController();
-  mocks.invoke.mockImplementation(async () => {
+  invoke.mockImplementation(async (command, args) => {
+    if (command === "cancel_page_read") return;
     controller.abort();
-    return { text: "", imageUrl: "data:image/png;base64,AQID" };
+    args.onProgress.onmessage(0);
+    return { source: "tesseract", text: "late", confidence: 82 };
   });
   await expect(readPage({ ...options(), signal: controller.signal })).rejects.toThrow();
-  expect(mocks.ocr).not.toHaveBeenCalled();
+  const jobId = invoke.mock.calls[0][1].jobId;
+  expect(invoke.mock.calls.slice(1)).toEqual([
+    ["cancel_page_read", { jobId }],
+    ["cancel_page_read", { jobId }],
+  ]);
 });
-it("rejects remote image sources instead of sending document data to another host", async () => {
-  mocks.invoke.mockResolvedValue({ text: "", imageUrl: "https://unexpected.invalid/private.png" });
-  await expect(readPage(options())).rejects.toThrow("페이지 이미지를 준비하지 못했어요.");
-  expect(mocks.ocr).not.toHaveBeenCalled();
+it("forwards progress and forced OCR to the backend", async () => {
+  const onProgress = vi.fn();
+  invoke.mockImplementation(async (_, args) => {
+    expect(args.forceOcr).toBe(true);
+    args.onProgress.onmessage(70);
+    return { text: "", source: "tesseract", confidence: 0 };
+  });
+  await readPage({ ...options(), forceOcr: true, onProgress });
+  expect(onProgress).toHaveBeenCalledWith(70);
+});
+it("propagates native permission errors", async () => {
+  invoke.mockRejectedValue(new Error("extraction prohibited"));
+  await expect(readPage(options())).rejects.toThrow("extraction prohibited");
+  expect(invoke).toHaveBeenCalledOnce();
+});
+it("rejects an obsolete bitmap response", async () => {
+  invoke.mockResolvedValue({ text: "", imageUrl: "data:image/png;base64,AQID" });
+  await expect(readPage(options())).rejects.toThrow("페이지 글자");
 });

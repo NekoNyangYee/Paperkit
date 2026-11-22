@@ -18,18 +18,22 @@ it("keeps cancellation as the default and resolves discard only on explicit conf
   trigger.focus();
   fireEvent.click(trigger);
   await screen.findByRole("alertdialog", { name: "변경 사항 확인" });
-  expect(document.activeElement).toBe(screen.getByRole("button", { name: "돌아가기" }));
+  expect(document.activeElement).toBe(screen.getByRole("button", { name: "취소" }));
   fireEvent.keyDown(document.activeElement!, { key: "Escape" });
+  expect(result).not.toHaveBeenCalled();
+  fireEvent.pointerDown(document.querySelector(".modal-overlay")!, { button: 0 });
+  expect(screen.getByRole("alertdialog")).toBeTruthy();
+  fireEvent.click(screen.getByRole("button", { name: "취소" }));
   await waitFor(() => expect(result).toHaveBeenLastCalledWith(false));
   await waitFor(() => expect(document.activeElement).toBe(trigger));
   fireEvent.click(trigger);
-  fireEvent.click(await screen.findByRole("button", { name: "변경 버리기" }));
+  fireEvent.click(await screen.findByRole("button", { name: "버리기" }));
   await waitFor(() => expect(result).toHaveBeenLastCalledWith(true));
 });
 it("dismisses a notification without reopening it on unrelated rerenders", async () => {
   const view = render(<MessageDialog message="저장했습니다." />);
   expect(screen.getByRole("alertdialog")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "확인" }));
+  fireEvent.click(screen.getByRole("button", { name: "취소" }));
   await waitFor(() => expect(screen.queryByRole("alertdialog")).toBeNull());
   view.rerender(<MessageDialog message="저장했습니다." />);
   expect(screen.queryByRole("alertdialog")).toBeNull();

@@ -47,15 +47,15 @@ impl Ensemble {
     pub fn open<'a>(
         &self,
         pdfium: &'a Pdfium,
-        bytes: Vec<u8>,
+        bytes: &[u8],
     ) -> Result<(PdfDocument<'a>, bool), EngineError> {
-        match pdfium.load_pdf_from_byte_vec(bytes.clone(), None) {
+        match pdfium.load_pdf_from_byte_vec(bytes.to_vec(), None) {
             Ok(document) if !document.pages().is_empty() => Ok((document, false)),
             Err(PdfiumError::PdfiumLibraryInternalError(PdfiumInternalError::PasswordError)) => {
                 Err(EngineError::PasswordRequired)
             }
             _ => {
-                let recovered = self.repair(&bytes)?;
+                let recovered = self.repair(bytes)?;
                 let parsed = lopdf::Document::load_mem(&recovered)
                     .map_err(|_| EngineError::InvalidDocument)?;
                 let expected = parsed.get_pages().len();

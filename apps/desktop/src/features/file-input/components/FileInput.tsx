@@ -1,3 +1,4 @@
+import { ActionButton } from "@/shared/ui/action-button";
 import { Button } from "@/shared/ui/button";
 import { useEffect, useRef, useState } from "react";
 import { getCurrentWebview } from "@tauri-apps/api/webview";
@@ -5,9 +6,10 @@ import { open } from "@tauri-apps/plugin-dialog";
 import { isDesktop } from "@/shared/desktop/files";
 import { useFileStore } from "@/features/file-input/model/file-store";
 import { FileThumbnail } from "./FileThumbnail";
-import { FileText, Upload, RotateCcw } from "lucide-react";
+import { FolderOpen, FileText, Upload, RotateCcw } from "lucide-react";
 import { IconButton } from "@/shared/ui/icon-button";
 import { MessageDialog } from "@/shared/ui/MessageDialog";
+import { ActionContextMenu, ContextMenuItem } from "@/shared/ui/context-menu";
 
 function formatSize(bytes: number): string {
   if (bytes < 1024) return `${bytes} B`;
@@ -83,90 +85,111 @@ export function FileInput() {
   }, [desktop, initialize, receive]);
 
   return (
-    <section
-      ref={area}
-      aria-labelledby="workspace-title"
-      aria-busy={busy}
-      onDragOver={(event) => event.preventDefault()}
-      onDrop={(event) => event.preventDefault()}
-      className={`w-full rounded-xl border border-dashed px-6 py-8 text-center transition-colors sm:px-10 sm:py-10 ${dragging ? "border-emerald-700 bg-emerald-50" : "border-stone-300 bg-white/60"}`}
+    <ActionContextMenu
+      label="파일 선택 작업"
+      items={
+        <>
+          <ContextMenuItem disabled={!desktop || !ready || busy} onSelect={() => void chooseFile()}>
+            <Upload />
+            {file ? "다른 PDF 선택" : "PDF 파일 선택"}
+          </ContextMenuItem>
+          {file && (
+            <ContextMenuItem disabled={!desktop || !ready || busy} onSelect={openFile}>
+              <FileText />
+              선택한 PDF 열기
+            </ContextMenuItem>
+          )}
+        </>
+      }
     >
-      <div
-        className={`mx-auto grid size-12 place-items-center rounded-lg ${dragging ? "bg-emerald-100" : "bg-stone-100"}`}
-        aria-hidden="true"
+      <section
+        ref={area}
+        aria-labelledby="workspace-title"
+        aria-busy={busy}
+        onDragOver={(event) => event.preventDefault()}
+        onDrop={(event) => event.preventDefault()}
+        className={`w-full rounded-xl border border-dashed px-6 py-10 text-center transition-colors sm:px-10 sm:py-14 ${dragging ? "border-emerald-700 bg-emerald-50" : "border-stone-300 bg-white/60"}`}
       >
-        {file && !dragging ? (
-          <FileText size={25} strokeWidth={1.5} className="text-emerald-900" />
-        ) : (
-          <Upload size={25} strokeWidth={1.5} className="text-emerald-900" />
-        )}
-      </div>
-      <h1 id="workspace-title" className="mt-5 text-xl font-semibold tracking-tight">
-        {dragging ? "여기에 놓아주세요" : file ? "이 파일을 열까요?" : "PDF 파일을 끌어다 놓으세요"}
-      </h1>
-      {file && (
         <div
-          className="mt-7 rounded-2xl bg-stone-100/80 px-5 py-5 text-left"
-          aria-label="선택한 파일 정보"
-          aria-live="polite"
+          className={`mx-auto grid size-12 place-items-center rounded-lg ${dragging ? "bg-emerald-100" : "bg-stone-100"}`}
+          aria-hidden="true"
         >
-          <div className="flex items-center gap-4">
-            <span className="mt-0.5 rounded bg-white px-2 py-1 text-xs font-semibold text-emerald-900">
-              PDF
-            </span>
-            <div className="min-w-0 flex-1">
-              <p className="break-all text-sm font-semibold text-stone-800">{file.name}</p>
-              <p className="mt-1 text-xs text-stone-500">{formatSize(file.sizeBytes)}</p>
-              <p className="mt-2 break-all text-xs leading-5 text-stone-400">{file.path}</p>
-            </div>
-            <FileThumbnail key={file.id} fileId={file.id} />
-          </div>
+          {file && !dragging ? (
+            <FileText size={25} strokeWidth={1.5} className="text-emerald-900" />
+          ) : (
+            <Upload size={25} strokeWidth={1.5} className="text-emerald-900" />
+          )}
         </div>
-      )}
-      <div className="mt-7 flex flex-wrap justify-center gap-3">
-        <Button
-          variant="ghost"
-          type="button"
-          onClick={() => void chooseFile()}
-          disabled={!desktop || !ready || busy}
-          className={`min-h-12 min-w-36 rounded-xl px-6 py-3 text-sm font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 disabled:opacity-40 ${file ? "border border-stone-300 bg-white text-stone-600 hover:bg-stone-50" : "bg-emerald-900 text-white hover:bg-emerald-800"}`}
-        >
-          {busy ? "확인 중…" : file ? "다른 파일 선택" : "파일 선택"}
-        </Button>
+        <h1 id="workspace-title" className="mt-5 text-xl font-semibold tracking-tight">
+          {dragging
+            ? "여기에 놓아주세요"
+            : file
+              ? "이 파일을 열까요?"
+              : "PDF 파일을 끌어다 놓으세요"}
+        </h1>
         {file && (
+          <div
+            className="mt-7 rounded-2xl bg-stone-100/80 px-5 py-5 text-left"
+            aria-label="선택한 파일 정보"
+            aria-live="polite"
+          >
+            <div className="flex items-center gap-4">
+              <span className="mt-0.5 rounded bg-white px-2 py-1 text-xs font-semibold text-emerald-900">
+                PDF
+              </span>
+              <div className="min-w-0 flex-1">
+                <p className="break-all text-sm font-semibold text-stone-800">{file.name}</p>
+                <p className="mt-1 text-xs text-stone-500">{formatSize(file.sizeBytes)}</p>
+                <p className="mt-2 break-all text-xs leading-5 text-stone-400">{file.path}</p>
+              </div>
+              <FileThumbnail key={file.id} fileId={file.id} />
+            </div>
+          </div>
+        )}
+        <div className="mt-7 flex flex-wrap justify-center gap-3">
           <Button
             variant="ghost"
             type="button"
-            onClick={openFile}
+            onClick={() => void chooseFile()}
             disabled={!desktop || !ready || busy}
-            className="min-h-12 min-w-36 rounded-xl bg-emerald-900 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-emerald-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 disabled:opacity-40"
+            className={`min-h-12 min-w-36 rounded-xl px-6 py-3 text-sm font-semibold transition-colors focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 disabled:opacity-40 ${file ? "border border-stone-300 bg-white text-stone-600 hover:bg-stone-50" : "bg-emerald-900 text-white hover:bg-emerald-800"}`}
           >
-            PDF 열기
+            <FolderOpen size={16} aria-hidden="true" /> 파일 선택
           </Button>
+          {file && (
+            <ActionButton
+              action="open"
+              variant="ghost"
+              type="button"
+              onClick={openFile}
+              disabled={!desktop || !ready || busy}
+              className="min-h-12 min-w-36 rounded-xl bg-emerald-900 px-6 py-3 text-sm font-semibold text-white transition-colors hover:bg-emerald-800 focus-visible:outline-2 focus-visible:outline-offset-2 focus-visible:outline-emerald-700 disabled:opacity-40"
+            />
+          )}
+        </div>
+        <div role="status" aria-live="polite">
+          {busy && (
+            <p className="mt-5 text-sm text-stone-500">
+              {choosing
+                ? "파일을 선택해 주세요."
+                : phase === "restoring"
+                  ? "선택 상태를 불러오고 있습니다."
+                  : phase === "clearing"
+                    ? "선택을 해제하고 있습니다."
+                    : "파일을 확인하고 있습니다."}
+            </p>
+          )}
+        </div>
+        <MessageDialog kind="error" title="파일 확인" message={error ?? listenerError} />
+        {desktop && !ready && phase === "error" && (
+          <IconButton label="다시 연결" icon={RotateCcw} onClick={() => void initialize()} />
         )}
-      </div>
-      <div role="status" aria-live="polite">
-        {busy && (
-          <p className="mt-5 text-sm text-stone-500">
-            {choosing
-              ? "파일을 선택해 주세요."
-              : phase === "restoring"
-                ? "선택 상태를 불러오고 있습니다."
-                : phase === "clearing"
-                  ? "선택을 해제하고 있습니다."
-                  : "파일을 확인하고 있습니다."}
+        {!desktop && (
+          <p className="mt-5 text-xs text-stone-500">
+            파일 선택과 드래그 앤 드롭은 데스크톱 앱에서 사용할 수 있습니다.
           </p>
         )}
-      </div>
-      <MessageDialog title="파일 확인" message={error ?? listenerError} />
-      {desktop && !ready && phase === "error" && (
-        <IconButton label="다시 연결" icon={RotateCcw} onClick={() => void initialize()} />
-      )}
-      {!desktop && (
-        <p className="mt-5 text-xs text-stone-500">
-          파일 선택과 드래그 앤 드롭은 데스크톱 앱에서 사용할 수 있습니다.
-        </p>
-      )}
-    </section>
+      </section>
+    </ActionContextMenu>
   );
 }

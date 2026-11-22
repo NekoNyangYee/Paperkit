@@ -41,27 +41,6 @@ export async function clipboardImage(file: Blob): Promise<number[]> {
   }
 }
 
-export type GraphicContent =
-  { kind: "pasteGraphic"; source: number[] } | { kind: "pasteImage"; png: number[] };
-
-export async function readGraphicClipboard(): Promise<GraphicContent> {
-  let items: ClipboardItems;
-  try {
-    items = await navigator.clipboard.read();
-  } catch {
-    throw new Error("클립보드를 읽지 못했습니다. Ctrl+V로 붙여넣어 주세요.");
-  }
-  for (const item of items) {
-    if (item.types.includes("text/plain")) {
-      const source = recalledGraphic(await (await item.getType("text/plain")).text());
-      if (source) return { kind: "pasteGraphic", source };
-    }
-    const type = item.types.find((type) => type.startsWith("image/"));
-    if (type) return { kind: "pasteImage", png: await clipboardImage(await item.getType(type)) };
-  }
-  throw new Error("이미지 또는 복사한 PDF 객체를 클립보드에 넣어 주세요.");
-}
-
 export async function graphicPreview(
   url: string,
   box: { left: number; top: number; width: number; height: number },

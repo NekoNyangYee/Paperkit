@@ -1,3 +1,4 @@
+import { X, LogIn } from "lucide-react";
 import {
   cancelGoogleLogin,
   signInWithGoogle,
@@ -16,7 +17,8 @@ export function LibrarySignIn() {
         disabled={!authConfig || (!signingIn && (busy || !ready))}
         onClick={() => void (signingIn ? cancelGoogleLogin() : signInWithGoogle())}
       >
-        {signingIn ? "로그인 취소" : busy ? "로그인 연결 중…" : "로그인"}
+        {signingIn ? <X size={16} aria-hidden="true" /> : <LogIn size={16} aria-hidden="true" />}
+        {signingIn ? "로그인 취소" : "로그인"}
       </Button>
       {error && (
         <p role="alert" className="mt-3 text-xs leading-5 text-red-700">

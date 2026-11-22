@@ -1,5 +1,11 @@
 import { UserFacingError } from "@/shared/lib/errors";
 
+export function toolPngBytes(content: string): number[] {
+  const prefix = "data:image/png;base64,";
+  if (!content.startsWith(prefix)) throw new UserFacingError("보관한 이미지를 읽을 수 없습니다.");
+  return Array.from(atob(content.slice(prefix.length)), (char) => char.charCodeAt(0));
+}
+
 // Shared image preparation for creating and editing saved tools.
 export async function readToolImage(file: File): Promise<string> {
   if (file.size > 8 * 1024 * 1024) throw new UserFacingError("8 MB 이하의 이미지를 선택해 주세요.");

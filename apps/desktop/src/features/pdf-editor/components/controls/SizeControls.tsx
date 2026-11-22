@@ -1,5 +1,5 @@
+import { ActionButton } from "@/shared/ui/action-button";
 import { Input } from "@/shared/ui/input";
-import { Button } from "@/shared/ui/button";
 import { useState } from "react";
 
 export function SizeControls({
@@ -54,14 +54,13 @@ export function SizeControls({
           className="h-8 w-16 px-1 text-xs"
         />
       </label>
-      <Button
+      <ActionButton
+        action="apply"
         variant="ghost"
         type="submit"
         disabled={disabled || !valid}
         className="rounded border px-2 py-1 disabled:opacity-40"
-      >
-        크기 적용
-      </Button>
+      />
     </form>
   );
 }

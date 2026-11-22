@@ -176,14 +176,6 @@ body {
   border-right: 1px solid #e7e5e4;
 }
 
-.ribbon-caption {
-  white-space: nowrap;
-  text-align: center;
-  font-size: 10px;
-  line-height: 16px;
-  color: #78716c;
-}
-
 .ribbon-command {
   display: inline-flex;
   height: 32px;
@@ -206,12 +198,6 @@ body {
 .editor-ribbon,
 .editor-text-tools {
   scrollbar-width: thin;
-}
-
-@media (max-width: 1100px) {
-  .editor-ribbon .ribbon-caption {
-    display: none;
-  }
 }
 
 .ribbon-command:hover:not(:disabled) {

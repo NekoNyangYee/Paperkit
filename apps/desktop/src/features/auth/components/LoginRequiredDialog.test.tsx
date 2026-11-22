@@ -18,35 +18,28 @@ beforeEach(() => {
 });
 afterEach(cleanup);
 
-it("keeps cancellation enabled and returns to login when the attempt ends", () => {
-  const view = render(<LoginRequiredDialog open feature="전자서명" onClose={vi.fn()} />);
+it("keeps a pending sign-in open on Escape and outside clicks, and cancels only from X", async () => {
+  const onClose = vi.fn();
+  const view = render(<LoginRequiredDialog open feature="전자서명" onClose={onClose} />);
   fireEvent.click(screen.getByRole("button", { name: "Google로 로그인" }));
   expect(mocks.login).toHaveBeenCalledOnce();
   mocks.state.busy = true;
   mocks.state.signingIn = true;
-  view.rerender(<LoginRequiredDialog open feature="전자서명" onClose={vi.fn()} />);
-  const cancel = screen.getByRole("button", { name: "로그인 취소" });
-  expect(cancel.hasAttribute("disabled")).toBe(false);
+  view.rerender(<LoginRequiredDialog open feature="전자서명" onClose={onClose} />);
+  expect(screen.getByRole("button", { name: "Google로 로그인" }).hasAttribute("disabled")).toBe(
+    true,
+  );
+  // Radix installs the outside pointer listener after the opening event.
+  await new Promise((resolve) => setTimeout(resolve, 0));
+  const overlay = document.querySelector(".modal-overlay")!;
+  fireEvent.pointerDown(overlay, { button: 0, pointerType: "mouse" });
+  fireEvent.click(overlay);
+  fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
+  expect(mocks.cancel).not.toHaveBeenCalled();
+  expect(onClose).not.toHaveBeenCalled();
+  const cancel = screen.getByRole("button", { name: "취소" });
+  expect(cancel.textContent).toBe("");
   fireEvent.click(cancel);
   expect(mocks.cancel).toHaveBeenCalledOnce();
-  mocks.state.busy = false;
-  mocks.state.signingIn = false;
-  view.rerender(<LoginRequiredDialog open feature="전자서명" onClose={vi.fn()} />);
-  expect(screen.getByRole("button", { name: "Google로 로그인" }).hasAttribute("disabled")).toBe(
-    false,
-  );
+  expect(onClose).toHaveBeenCalledOnce();
 });
-
-it.each(["close", "escape"])(
-  "cancels a pending login when the modal is dismissed by %s",
-  (method) => {
-    mocks.state.busy = true;
-    mocks.state.signingIn = true;
-    const onClose = vi.fn();
-    render(<LoginRequiredDialog open feature="워터마크" onClose={onClose} />);
-    if (method === "close") fireEvent.click(screen.getByRole("button", { name: "닫기" }));
-    else fireEvent.keyDown(screen.getByRole("dialog"), { key: "Escape" });
-    expect(mocks.cancel).toHaveBeenCalledOnce();
-    expect(onClose).toHaveBeenCalledOnce();
-  },
-);

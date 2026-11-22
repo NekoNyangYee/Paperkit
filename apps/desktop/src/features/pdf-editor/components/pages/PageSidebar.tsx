@@ -2,9 +2,10 @@ import { Button } from "@/shared/ui/button";
 import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { renderThumbnail } from "@/shared/pdf/api";
-import { RotateCcw, RotateCw, Copy, Trash2 } from "lucide-react";
+import { RotateCcw, RotateCw, Copy, Trash2, FileText, ScanText } from "lucide-react";
 import appIcon from "../../../../../app-icon.svg";
 import { IconButton } from "@/shared/ui/icon-button";
+import { ActionContextMenu, ContextMenuItem, ContextMenuSeparator } from "@/shared/ui/context-menu";
 
 const ROW_HEIGHT = 196;
 const CACHE_LIMIT = 64;
@@ -21,6 +22,7 @@ export function PageSidebar({
   pageCount,
   selectedPage,
   onSelect,
+  onReadText,
   open,
   revision = 0,
   paused = false,
@@ -32,6 +34,7 @@ export function PageSidebar({
   pageCount: number;
   selectedPage: number;
   onSelect: (page: number) => void;
+  onReadText?: (page: number) => void;
   open: boolean;
   revision?: number;
   paused?: boolean;
@@ -296,114 +299,157 @@ export function PageSidebar({
       >
         <div className="relative" style={{ height: pageCount * ROW_HEIGHT }}>
           {rows.map((index) => (
-            <div
+            <ActionContextMenu
               key={index}
-              className="group absolute inset-x-0 px-3 py-2 transition-transform duration-200 ease-out motion-reduce:transition-none"
-              data-page-row={index}
-              style={{
-                top: index * ROW_HEIGHT,
-                height: ROW_HEIGHT,
-                opacity: dragView?.page === index ? 0 : 1,
-                transform: `translateY(${dragView && index !== dragView.page && index >= Math.min(dragView.page, dragView.target) && index <= Math.max(dragView.page, dragView.target) ? (dragView.target > dragView.page ? -ROW_HEIGHT : ROW_HEIGHT) : 0}px)`,
-              }}
-            >
-              <Button
-                variant="ghost"
-                onClick={() => {
-                  if (suppressClick.current) {
-                    suppressClick.current = false;
-                    return;
-                  }
-                  onSelect(index);
-                }}
-                onPointerDown={(event) => {
-                  suppressClick.current = false;
-                  if (!canEdit || event.button !== 0) return;
-                  drag.current = {
-                    page: index,
-                    y: event.clientY,
-                    x: event.clientX,
-                    startY: event.clientY,
-                    target: index,
-                    moved: false,
-                  };
-                  event.currentTarget.setPointerCapture(event.pointerId);
-                }}
-                onPointerMove={(event) => {
-                  const current = drag.current;
-                  const viewport = container.current;
-                  if (!current || !viewport || !canEdit) return;
-                  if (
-                    Math.hypot(event.clientY - current.startY, event.clientX - current.x) < 5 &&
-                    !current.moved
-                  )
-                    return;
-                  current.moved = true;
-                  current.x = event.clientX;
-                  current.y = event.clientY;
-                  updateDrag();
-                }}
-                onPointerUp={() => finishDrag()}
-                onPointerCancel={() => finishDrag(true)}
-                onLostPointerCapture={() => finishDrag(true)}
-                onKeyDown={(event) => {
-                  if (!canEdit || !event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key))
-                    return;
-                  event.preventDefault();
-                  const target = index + (event.key === "ArrowUp" ? -1 : 1);
-                  if (target >= 0 && target < pageCount) onPageAction?.("move", index, target);
-                }}
-                title={canEdit ? "드래그하여 순서 변경 · Alt+↑/↓로 이동" : undefined}
-                aria-label={`${index + 1}페이지로 이동`}
-                aria-current={selectedPage === index ? "page" : undefined}
-                className={`flex h-full w-full flex-col items-center rounded-lg border-2 p-2 focus-visible:outline-2 focus-visible:outline-emerald-700 ${canEdit ? "touch-none cursor-grab active:cursor-grabbing" : ""} ${selectedPage === index ? "border-emerald-700 bg-emerald-50" : "border-transparent hover:bg-stone-200"}`}
-              >
-                <div className="flex min-h-0 w-full flex-1 items-center justify-center">
-                  {images.has(index) ? (
-                    <img
-                      draggable={false}
-                      src={images.get(index)}
-                      alt={`${index + 1}페이지 썸네일`}
-                      className="max-h-full max-w-full bg-white object-contain shadow-sm"
-                    />
-                  ) : (
-                    <div className="grid h-full w-24 place-items-center rounded border border-stone-200 bg-white text-xs text-stone-400">
-                      {failed === index ? "표시 실패" : "불러오는 중…"}
-                    </div>
+              label={`${index + 1}페이지 작업`}
+              items={
+                <>
+                  <ContextMenuItem
+                    disabled={paused || selectedPage === index}
+                    onSelect={() => onSelect(index)}
+                  >
+                    <FileText />이 페이지로 이동
+                  </ContextMenuItem>
+                  {onReadText && (
+                    <ContextMenuItem disabled={paused} onSelect={() => onReadText(index)}>
+                      <ScanText />
+                      글자 추출
+                    </ContextMenuItem>
                   )}
-                </div>
-                <span className="mt-2 text-xs tabular-nums">{index + 1}</span>
-              </Button>
-              {editable && onPageAction && !dragging && (
-                <div
-                  role="group"
-                  aria-label={`${index + 1}페이지 작업`}
-                  className="pointer-events-none absolute bottom-0 left-1/2 z-10 flex -translate-x-1/2 divide-x divide-stone-200 rounded-md border border-stone-200 bg-white opacity-0 shadow-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
-                >
-                  <IconButton
-                    label={`${index + 1}페이지 복제`}
-                    icon={Copy}
+                  <ContextMenuSeparator />
+                  <ContextMenuItem
                     disabled={!canEdit}
-                    onClick={() => onPageAction("duplicate", index)}
-                    className="h-7 w-8 rounded-none"
-                  />
-                  <IconButton
-                    label={`${index + 1}페이지 회전`}
-                    icon={RotateCw}
+                    onSelect={() => onPageAction?.("duplicate", index)}
+                  >
+                    <Copy />
+                    페이지 복제
+                  </ContextMenuItem>
+                  <ContextMenuItem
                     disabled={!canEdit}
-                    onClick={() => onPageAction("rotate", index)}
-                    className="h-7 w-8 rounded-none"
-                  />
-                  <IconButton
-                    label={`${index + 1}페이지 삭제`}
-                    icon={Trash2}
+                    onSelect={() => onPageAction?.("rotate", index)}
+                  >
+                    <RotateCw />
+                    페이지 회전
+                  </ContextMenuItem>
+                  <ContextMenuItem
+                    destructive
                     disabled={!canEdit || pageCount <= 1}
-                    onClick={() => onPageAction("delete", index)}
-                    className="h-7 w-8 rounded-none text-red-600"
-                  />
-                </div>
-              )}
-            </div>
+                    onSelect={() => onPageAction?.("delete", index)}
+                  >
+                    <Trash2 />
+                    페이지 삭제
+                  </ContextMenuItem>
+                </>
+              }
+            >
+              <div
+                className="group absolute inset-x-0 px-3 py-2 transition-transform duration-200 ease-out motion-reduce:transition-none"
+                data-page-row={index}
+                style={{
+                  top: index * ROW_HEIGHT,
+                  height: ROW_HEIGHT,
+                  opacity: dragView?.page === index ? 0 : 1,
+                  transform: `translateY(${dragView && index !== dragView.page && index >= Math.min(dragView.page, dragView.target) && index <= Math.max(dragView.page, dragView.target) ? (dragView.target > dragView.page ? -ROW_HEIGHT : ROW_HEIGHT) : 0}px)`,
+                }}
+              >
+                <Button
+                  variant="ghost"
+                  onClick={() => {
+                    if (suppressClick.current) {
+                      suppressClick.current = false;
+                      return;
+                    }
+                    onSelect(index);
+                  }}
+                  onPointerDown={(event) => {
+                    suppressClick.current = false;
+                    if (!canEdit || event.button !== 0) return;
+                    drag.current = {
+                      page: index,
+                      y: event.clientY,
+                      x: event.clientX,
+                      startY: event.clientY,
+                      target: index,
+                      moved: false,
+                    };
+                    event.currentTarget.setPointerCapture(event.pointerId);
+                  }}
+                  onPointerMove={(event) => {
+                    const current = drag.current;
+                    const viewport = container.current;
+                    if (!current || !viewport || !canEdit) return;
+                    if (
+                      Math.hypot(event.clientY - current.startY, event.clientX - current.x) < 5 &&
+                      !current.moved
+                    )
+                      return;
+                    current.moved = true;
+                    current.x = event.clientX;
+                    current.y = event.clientY;
+                    updateDrag();
+                  }}
+                  onPointerUp={() => finishDrag()}
+                  onPointerCancel={() => finishDrag(true)}
+                  onLostPointerCapture={() => finishDrag(true)}
+                  onKeyDown={(event) => {
+                    if (!canEdit || !event.altKey || !["ArrowUp", "ArrowDown"].includes(event.key))
+                      return;
+                    event.preventDefault();
+                    const target = index + (event.key === "ArrowUp" ? -1 : 1);
+                    if (target >= 0 && target < pageCount) onPageAction?.("move", index, target);
+                  }}
+                  title={canEdit ? "드래그하여 순서 변경 · Alt+↑/↓로 이동" : undefined}
+                  aria-label={`${index + 1}페이지로 이동`}
+                  aria-current={selectedPage === index ? "page" : undefined}
+                  className={`flex h-full w-full flex-col items-center rounded-lg border-2 p-2 focus-visible:outline-2 focus-visible:outline-emerald-700 ${canEdit ? "touch-none cursor-grab active:cursor-grabbing" : ""} ${selectedPage === index ? "border-emerald-700 bg-emerald-50" : "border-transparent hover:bg-stone-200"}`}
+                >
+                  <div className="flex min-h-0 w-full flex-1 items-center justify-center">
+                    {images.has(index) ? (
+                      <img
+                        draggable={false}
+                        src={images.get(index)}
+                        alt={`${index + 1}페이지 썸네일`}
+                        className="max-h-full max-w-full bg-white object-contain shadow-sm"
+                      />
+                    ) : (
+                      <div className="grid h-full w-24 place-items-center rounded border border-stone-200 bg-white text-xs text-stone-400">
+                        {failed === index ? "표시 실패" : "불러오는 중…"}
+                      </div>
+                    )}
+                  </div>
+                  <span className="mt-2 text-xs tabular-nums">{index + 1}</span>
+                </Button>
+                {editable && onPageAction && !dragging && (
+                  <div
+                    role="group"
+                    aria-label={`${index + 1}페이지 작업`}
+                    className="pointer-events-none absolute bottom-0 left-1/2 z-10 flex -translate-x-1/2 divide-x divide-stone-200 rounded-md border border-stone-200 bg-white opacity-0 shadow-sm transition-opacity group-hover:pointer-events-auto group-hover:opacity-100 group-focus-within:pointer-events-auto group-focus-within:opacity-100"
+                  >
+                    <IconButton
+                      label={`${index + 1}페이지 복제`}
+                      icon={Copy}
+                      disabled={!canEdit}
+                      onClick={() => onPageAction("duplicate", index)}
+                      className="h-7 w-8 rounded-none"
+                    />
+                    <IconButton
+                      label={`${index + 1}페이지 회전`}
+                      icon={RotateCw}
+                      disabled={!canEdit}
+                      onClick={() => onPageAction("rotate", index)}
+                      className="h-7 w-8 rounded-none"
+                    />
+                    <IconButton
+                      label={`${index + 1}페이지 삭제`}
+                      icon={Trash2}
+                      disabled={!canEdit || pageCount <= 1}
+                      onClick={() => onPageAction("delete", index)}
+                      className="h-7 w-8 rounded-none text-red-600"
+                    />
+                  </div>
+                )}
+              </div>
+            </ActionContextMenu>
           ))}
           {dragView && (
             <div
@@ -420,9 +466,7 @@ export function PageSidebar({
         </div>
       </div>
       <span role="status" className="sr-only">
-        {dragView
-          ? `${dragView.page + 1}페이지를 ${dragView.target + 1}번째 위치로 이동 · Esc로 취소`
-          : ""}
+        {dragView ? `${dragView.page + 1}페이지를 ${dragView.target + 1}번째 위치로 이동` : ""}
       </span>
       {dragView &&
         createPortal(

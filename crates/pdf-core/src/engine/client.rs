@@ -15,6 +15,55 @@ pub struct Paperframe {
 }
 
 impl Paperframe {
+    pub fn save_masked_copy(
+        &self,
+        id: String,
+        revision: u64,
+        masks: Vec<crate::security::Mask>,
+        path: PathBuf,
+    ) -> Result<(), PreviewError> {
+        self.save_masked_copy_with_text(id, revision, masks, Vec::new(), path)
+    }
+    pub fn preview_text_masks(
+        &self,
+        id: String,
+        revision: u64,
+        page: i32,
+        text_masks: Vec<crate::security::TextMask>,
+    ) -> Result<Vec<u8>, PreviewError> {
+        let (reply, receiver) = mpsc::sync_channel(1);
+        self.sender
+            .send(Request::MaskPreview {
+                id,
+                revision,
+                page,
+                text_masks,
+                reply,
+            })
+            .map_err(|_| PreviewError::WorkerStopped)?;
+        receiver.recv().map_err(|_| PreviewError::WorkerStopped)?
+    }
+    pub fn save_masked_copy_with_text(
+        &self,
+        id: String,
+        revision: u64,
+        masks: Vec<crate::security::Mask>,
+        text_masks: Vec<crate::security::TextMask>,
+        path: PathBuf,
+    ) -> Result<(), PreviewError> {
+        let (reply, receiver) = mpsc::sync_channel(1);
+        self.sender
+            .send(Request::MaskedCopy {
+                id,
+                revision,
+                masks,
+                text_masks,
+                path,
+                reply,
+            })
+            .map_err(|_| PreviewError::WorkerStopped)?;
+        receiver.recv().map_err(|_| PreviewError::WorkerStopped)?
+    }
     pub fn extract_text(
         &self,
         id: String,

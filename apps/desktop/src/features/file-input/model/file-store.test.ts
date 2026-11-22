@@ -31,6 +31,19 @@ beforeEach(() => {
     error: null,
   }));
 });
+it("allows a guest to open a PDF but never implicitly opens a second tab", async () => {
+  useAuthStore.setState({ session: null });
+  const store = useFileStore.getState();
+  await store.initialize();
+  await store.receive(["a.pdf"]);
+  await store.replaceFile(["b.pdf"]);
+  expect(useFileStore.getState().tabs).toHaveLength(1);
+  expect(useFileStore.getState().file?.path).toBe("a.pdf");
+  expect(mocks.inspect).toHaveBeenCalledTimes(1);
+  await store.closeTab(useFileStore.getState().activeTabId);
+  await store.receive(["b.pdf"]);
+  expect(useFileStore.getState().file?.path).toBe("b.pdf");
+});
 it("keeps independent documents and views, and focuses an already-open file", async () => {
   await useFileStore.getState().initialize();
   await useFileStore.getState().receive(["a.pdf"]);

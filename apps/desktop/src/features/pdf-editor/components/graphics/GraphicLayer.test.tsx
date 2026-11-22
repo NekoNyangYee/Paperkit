@@ -173,12 +173,9 @@ it("resizes and deletes the selected object", async () => {
       matrix: [2, 0, 0, 2, -10, -70],
     }),
   );
-  await waitFor(() =>
-    expect(screen.getByRole("button", { name: "이미지·도형 삭제" }).hasAttribute("disabled")).toBe(
-      false,
-    ),
-  );
-  fireEvent.click(screen.getByRole("button", { name: "이미지·도형 삭제" }));
+  expect(screen.queryByRole("button", { name: "이미지·도형 삭제" })).toBeNull();
+  fireEvent.contextMenu(screen.getByLabelText("선택한 이미지·도형 이동"));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "이미지·도형 삭제" }));
   await waitFor(() =>
     expect(edit).toHaveBeenLastCalledWith({ kind: "deleteGraphic", page: 0, object: 0 }),
   );
@@ -199,11 +196,6 @@ it("changes only the requested dimension with side handles", async () => {
       object: 0,
       matrix: [2, 0, 0, 1, -10, 0],
     }),
-  );
-  await waitFor(() =>
-    expect(screen.getByRole("button", { name: "이미지·도형 삭제" }).hasAttribute("disabled")).toBe(
-      false,
-    ),
   );
   const vertical = screen.getByRole("button", { name: "이미지·도형 세로 조절" });
   fireEvent.pointerDown(vertical, { clientX: 50, clientY: 70 });
@@ -230,7 +222,8 @@ it("copies a snapshot and pastes it after changing pages, without using stale ob
     <GraphicLayer page={page} disabled={false} onEdit={edit} onSelect={() => {}} />,
   );
   fireEvent.click(screen.getByRole("button", { name: "이미지 1 선택" }));
-  fireEvent.click(screen.getByRole("button", { name: "이미지·도형 복사" }));
+  fireEvent.contextMenu(screen.getByLabelText("선택한 이미지·도형 이동"));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "이미지·도형 복사" }));
   await waitFor(() => expect(writeText).toHaveBeenCalledOnce());
   expect(invoke).toHaveBeenCalledWith("copy_graphic", {
     fileId: "a",

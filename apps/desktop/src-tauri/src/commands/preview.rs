@@ -9,6 +9,7 @@ pub struct PreviewState(pub Paperframe, pub std::path::PathBuf);
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct PreviewPage {
+    signatures: Vec<pdf_core::security::SignatureReport>,
     recovered: bool,
     file_id: String,
     page_count: i32,
@@ -20,50 +21,7 @@ pub struct PreviewPage {
     state: pdf_core::edit::EditState,
 }
 
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
-pub struct PageTextSource {
-    text: String,
-    image_url: Option<String>,
-}
-
-#[tauri::command]
-pub async fn extract_page_text(
-    file_id: String,
-    revision: u64,
-    page_index: i32,
-    force_ocr: Option<bool>,
-    state: State<'_, AppState>,
-    preview: State<'_, PreviewState>,
-) -> Result<PageTextSource, String> {
-    if !state
-        .1
-        .lock()
-        .map_err(|_| "파일 상태를 확인하지 못했어요.")?
-        .contains_key(&file_id)
-    {
-        return Err("문서를 다시 선택해 주세요.".into());
-    }
-    let engine = preview.0.clone();
-    tauri::async_runtime::spawn_blocking(move || {
-        let result = engine
-            .extract_text(file_id, revision, page_index, force_ocr.unwrap_or(false))
-            .map_err(message)?;
-        Ok(PageTextSource {
-            text: result.text,
-            image_url: result.png.map(|bytes| {
-                format!(
-                    "data:image/png;base64,{}",
-                    base64::engine::general_purpose::STANDARD.encode(bytes)
-                )
-            }),
-        })
-    })
-    .await
-    .map_err(|_| "페이지 글자를 읽지 못했어요. 다시 시도해 주세요.".to_owned())?
-}
-
-fn message(error: PreviewError) -> String {
+pub(super) fn message(error: PreviewError) -> String {
     match error {
         PreviewError::PageOverflow => "블록 너비가 너무 좁거나 내용이 페이지 경계를 벗어납니다. 블록 크기나 위치를 조절해 주세요.",
         PreviewError::FollowingContentOverflow => "문단 아래 내용을 배치할 페이지 공간이 부족합니다. 문단 너비 또는 글자 크기를 조절해 주세요. 입력은 유지했습니다.",
@@ -285,6 +243,7 @@ pub async fn render_selected_page(
     }
     let page = rendered.map_err(message)?;
     Ok(PreviewPage {
+        signatures: page.signatures,
         recovered: page.recovered,
         text: page.text,
         state: page.state,
@@ -298,6 +257,56 @@ pub async fn render_selected_page(
             base64::engine::general_purpose::STANDARD.encode(page.png)
         ),
     })
+}
+
+#[tauri::command]
+pub async fn preview_text_masks(
+    file_id: String,
+    revision: u64,
+    page: i32,
+    text_masks: Vec<pdf_core::security::TextMask>,
+    preview: State<'_, PreviewState>,
+) -> Result<tauri::ipc::Response, String> {
+    let engine = preview.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        engine
+            .preview_text_masks(file_id, revision, page, text_masks)
+            .map(tauri::ipc::Response::new)
+            .map_err(message)
+    })
+    .await
+    .map_err(|_| "마스킹 미리보기를 만들지 못했습니다.".to_owned())?
+}
+
+#[tauri::command]
+pub async fn save_masked_copy(
+    file_id: String,
+    revision: u64,
+    masks: Vec<pdf_core::security::Mask>,
+    text_masks: Option<Vec<pdf_core::security::TextMask>>,
+    path: std::path::PathBuf,
+    preview: State<'_, PreviewState>,
+) -> Result<(), String> {
+    let engine = preview.0.clone();
+    tauri::async_runtime::spawn_blocking(move || {
+        engine
+            .save_masked_copy_with_text(
+                file_id,
+                revision,
+                masks,
+                text_masks.unwrap_or_default(),
+                path,
+            )
+            .map_err(|error| match error {
+                PreviewError::UnsupportedText => "maskPermissions".to_owned(),
+                PreviewError::TooLarge => "maskSize".to_owned(),
+                PreviewError::VerificationFailed => "maskVerification".to_owned(),
+                PreviewError::StaleObject => "maskRevision".to_owned(),
+                other => message(other),
+            })
+    })
+    .await
+    .map_err(|_| "마스킹 사본을 저장하지 못했습니다.".to_owned())?
 }
 
 #[tauri::command]

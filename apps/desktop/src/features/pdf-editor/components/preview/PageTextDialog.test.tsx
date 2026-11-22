@@ -18,7 +18,7 @@ it("shows native text, copies from the result, and retains it if image recogniti
   fireEvent.click(screen.getByRole("button", { name: "복사" }));
   await waitFor(() => expect(copy).toHaveBeenCalledWith("추출한 한글"));
   mocks.read.mockRejectedValueOnce(new Error("internal worker path"));
-  fireEvent.click(screen.getByRole("button", { name: "이미지에서 다시 읽기" }));
+  fireEvent.click(screen.getByRole("button", { name: "OCR 다시 읽기" }));
   expect((await screen.findByRole("alert")).textContent).toBe(
     "페이지 글자를 읽지 못했어요. 잠시 후 다시 시도해 주세요.",
   );

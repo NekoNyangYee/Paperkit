@@ -19,9 +19,28 @@ if ss -H -ltn "sport = :$port" | awk 'END { exit NR == 0 }'; then
   }
 fi
 "${compose[@]}" build --pull backend
+# Verify the actual target filesystem before replacing a healthy backend.
+bounded_data=$("${compose[@]}" config --format json | python3 -c '
+import json, sys
+s = json.load(sys.stdin)["services"]["backend"]
+if s.get("labels", {}).get("io.paperkit.storage") == "bounded":
+    print(next(v["source"] for v in s["volumes"] if v["target"] == "/data"))
+')
+running=$("${compose[@]}" ps -q --status running backend)
+if [[ -n "$running" ]]; then
+  old_mode=$(docker inspect --format '{{index .Config.Labels "io.paperkit.storage"}}' "$running")
+  old_data=$(docker inspect --format '{{range .Mounts}}{{if eq .Destination "/data"}}{{.Source}}{{end}}{{end}}' "$running")
+  if [[ ( -n "$bounded_data" && "$old_data" != "$bounded_data" ) || ( -z "$bounded_data" && "$old_mode" == bounded ) ]]; then
+    echo 'Storage destination changed. Stop writes and migrate the database as described in deploy/STORAGE.md.' >&2
+    exit 1
+  fi
+fi
+if [[ -n "$bounded_data" ]]; then
+  "${compose[@]}" run --rm --no-deps backend --check-storage
+fi
 # Validate configuration before replacing any running proxy.
 "${compose[@]}" run --rm --no-deps proxy caddy validate --config /etc/caddy/Caddyfile --adapter caddyfile
-if [[ -n "$("${compose[@]}" ps -q --status running backend)" ]]; then
+if [[ -n "$running" ]]; then
   bash deploy/backup.sh
 fi
 "${compose[@]}" up -d --force-recreate --wait --wait-timeout 120 backend proxy

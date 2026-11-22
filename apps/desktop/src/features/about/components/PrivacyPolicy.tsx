@@ -1,3 +1,4 @@
+import { ShieldCheck } from "lucide-react";
 import { Button } from "@/shared/ui/button";
 import { useState } from "react";
 import Markdown from "react-markdown";
@@ -14,7 +15,7 @@ export function PrivacyPolicy() {
         className="cursor-pointer rounded text-xs text-stone-500 underline underline-offset-4 hover:text-emerald-800 focus-visible:outline focus-visible:outline-2 focus-visible:outline-emerald-700"
         onClick={() => setOpen(true)}
       >
-        개인정보 처리방침
+        <ShieldCheck size={16} aria-hidden="true" /> 개인정보 처리방침
       </Button>
       <Dialog open={open} onOpenChange={setOpen}>
         <DialogContent className="flex w-[min(92vw,760px)] flex-col overflow-hidden p-0">
@@ -25,14 +26,6 @@ export function PrivacyPolicy() {
                 Paperkit의 정보 처리와 사용자 선택을 안내합니다.
               </DialogDescription>
             </div>
-            <Button
-              variant="ghost"
-              type="button"
-              onClick={() => setOpen(false)}
-              className="shrink-0 cursor-pointer rounded-lg border border-stone-200 px-3 py-2 text-sm hover:bg-stone-100"
-            >
-              닫기
-            </Button>
           </header>
           <article
             aria-label="개인정보 처리방침 내용"

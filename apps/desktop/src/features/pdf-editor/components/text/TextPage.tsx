@@ -7,8 +7,8 @@ import { InlineTextEditor } from "./InlineTextEditor";
 import { pdfDelta } from "@/features/pdf-editor/lib/geometry/coordinates";
 import { mergeSelection } from "@/features/pdf-editor/lib/text/merge-selection";
 import Moveable, { type Requester } from "react-moveable";
-import { Move, Trash2, Combine, X } from "lucide-react";
-import { IconButton } from "@/shared/ui/icon-button";
+import { Asterisk, Pencil, Trash2, Combine, X } from "lucide-react";
+import { ActionContextMenu, ContextMenuItem } from "@/shared/ui/context-menu";
 import { MessageDialog } from "@/shared/ui/MessageDialog";
 import { userErrorMessage } from "@/shared/lib/errors";
 import { GraphicLayer } from "@/features/pdf-editor/components/graphics/GraphicLayer";
@@ -98,12 +98,7 @@ export const TextPage = memo(function TextPage({
       onSelect(object);
     }
   };
-  const [hovered, setHovered] = useState<TextSelection | null>(null);
-  const hoverTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
-  const keepHover = () => {
-    if (hoverTimer.current) clearTimeout(hoverTimer.current);
-  };
-  useEffect(() => () => keepHover(), []);
+  const [menuTarget, setMenuTarget] = useState<TextSelection | null>(null);
   const [multiple, setMultiple] = useState<TextSelection[]>([]);
   const [marquee, setMarquee] = useState<{
     x: number;
@@ -115,7 +110,7 @@ export const TextPage = memo(function TextPage({
   const suppressClick = useRef(false);
   const iconDrag = useRef<{ x: number; y: number; target: TextSelection } | null>(null);
   useEffect(() => {
-    setHovered(null);
+    setMenuTarget(null);
     setMultiple([]);
     setMarquee(null);
   }, [page, mode, inlineEditing]);
@@ -409,10 +404,66 @@ export const TextPage = memo(function TextPage({
       (edge) => Math.abs(edge - y) < 0.75,
     ),
   );
+  function textMenu(target: TextSelection | null) {
+    return (
+      <>
+        {multiple.length > 1 && (
+          <ContextMenuItem
+            disabled={disabled || !merge}
+            onSelect={() => {
+              if (merge) {
+                onBeginEdit(merge);
+                setMultiple([]);
+              }
+            }}
+          >
+            <Combine />
+            {multiple.length}개 블록 함께 편집
+          </ContextMenuItem>
+        )}
+        <ContextMenuItem
+          disabled={!target || disabled}
+          onSelect={() => target && onBeginEdit(target)}
+        >
+          <Pencil />
+          텍스트 편집
+        </ContextMenuItem>
+        <ContextMenuItem
+          disabled={!target || disabled || target.id !== selected?.id}
+          onSelect={() => {
+            onDraft("**");
+            onApply("**");
+          }}
+        >
+          <Asterisk />
+          별표로 대체
+        </ContextMenuItem>
+        <ContextMenuItem
+          destructive
+          disabled={
+            disabled ||
+            !(target?.group?.canFlow || (target && !target.group && !target.editBlocked))
+          }
+          onSelect={() => target && onDelete(target)}
+        >
+          <Trash2 />
+          블록 삭제
+        </ContextMenuItem>
+        <ContextMenuItem
+          onSelect={() => {
+            setMultiple([]);
+            onSelect(null);
+          }}
+        >
+          <X />
+          선택 해제
+        </ContextMenuItem>
+      </>
+    );
+  }
   return (
     <div
       className="relative mx-auto select-none bg-white shadow-lg"
-      onMouseLeave={() => setHovered(null)}
       style={{ width: page.width, height: page.height }}
     >
       <img
@@ -514,14 +565,18 @@ export const TextPage = memo(function TextPage({
           height={page.height}
           viewBox={`0 0 ${page.width} ${page.height}`}
           aria-label="텍스트 객체 선택"
-          onClick={() => !disabled && onSelect(null)}
+          onClick={(event) => {
+            if (!disabled && event.currentTarget.contains(event.target as Node)) onSelect(null);
+          }}
           onClickCapture={(event) => {
+            if (!event.currentTarget.contains(event.target as Node)) return;
             if (suppressClick.current) {
               event.stopPropagation();
               suppressClick.current = false;
             }
           }}
           onPointerDown={(event) => {
+            if (!event.currentTarget.contains(event.target as Node)) return;
             if (disabled || inlineEditing || event.button !== 0) return;
             const r = event.currentTarget.getBoundingClientRect();
             start.current = { x: event.clientX - r.left, y: event.clientY - r.top };
@@ -572,98 +627,101 @@ export const TextPage = memo(function TextPage({
             );
           }}
         >
-          {targets.flatMap((object) =>
-            (object.group?.kind === "paragraph"
-              ? [object.screenBounds]
-              : (object.group?.screenBounds ?? [object.screenBounds])
-            ).map((bounds, index) => (
-              <polygon
-                key={`${object.id}-${index}`}
-                role="button"
-                tabIndex={disabled ? -1 : 0}
-                aria-label={`${object.group ? (mode === "sentence" ? "문장" : "블록") : "텍스트"} 선택: ${object.text}`}
-                aria-pressed={selected?.id === object.id}
-                aria-disabled={disabled}
-                points={bounds.map((p) => p.join(",")).join(" ")}
-                visibility={
-                  (inlineEditing || moving) && selected?.id === object.id ? "hidden" : undefined
-                }
-                strokeDasharray={selected?.id === object.id ? undefined : "5 4"}
-                data-editability={
-                  !object.editBlocked
-                    ? "editable"
-                    : object.fontChangeBlocked === null || object.group?.canFlow
-                      ? "font-required"
-                      : "blocked"
-                }
-                className={`cursor-text fill-transparent stroke-1 outline-none hover:fill-emerald-500/5 hover:stroke-2 focus:stroke-2 ${!object.editBlocked ? "stroke-emerald-600" : object.fontChangeBlocked === null || object.group?.canFlow ? "stroke-amber-600" : "stroke-stone-400"}`}
-                onMouseEnter={() => {
-                  keepHover();
-                  if (!inlineEditing) setHovered(object);
-                }}
-                onMouseLeave={() => {
-                  hoverTimer.current = setTimeout(() => setHovered(null), 180);
-                }}
-                onClick={(event) => clickText(object, event)}
-                onPointerDown={(event) => {
-                  if (
-                    disabled ||
-                    inlineEditing ||
-                    event.button !== 0 ||
-                    (object.fontChangeBlocked !== null && !object.group?.canFlow) ||
-                    !nearBorder(event, bounds)
-                  )
-                    return;
-                  event.stopPropagation();
-                  event.preventDefault();
-                  event.currentTarget.setPointerCapture(event.pointerId);
-                  iconDrag.current = { x: event.clientX, y: event.clientY, target: object };
-                  onSelect(object);
-                }}
-                onPointerMove={(event) => {
-                  event.currentTarget.style.cursor =
-                    !disabled && nearBorder(event, bounds) ? "move" : "text";
-                  if (iconDrag.current?.target.id === object.id) {
-                    event.stopPropagation();
-                    movePreview(
-                      event.clientX - iconDrag.current.x,
-                      event.clientY - iconDrag.current.y,
-                    );
-                  }
-                }}
-                onPointerUp={finishBorderDrag}
-                onPointerCancel={() => {
-                  iconDrag.current = null;
-                  resetMove();
-                }}
-                onLostPointerCapture={() => {
-                  if (iconDrag.current) {
-                    iconDrag.current = null;
-                    resetMove();
-                  }
-                }}
-                onDoubleClick={(event) => {
-                  event.stopPropagation();
-                  point.current = { x: event.clientX, y: event.clientY };
-                  if (!disabled) onBeginEdit(object);
-                }}
-                onKeyDown={(event) => {
-                  if (!disabled && (event.key === "Enter" || event.key === " ")) {
-                    event.preventDefault();
-                    point.current = null;
-                    if (event.key === "Enter") onBeginEdit(object);
-                    else onSelect(object);
-                  }
-                }}
-              >
-                <title>
-                  {object.editBlocked
-                    ? `${object.fontChangeBlocked === null || object.group?.canFlow ? "글꼴 전환 후 편집 가능" : object.editBlocked}: ${object.text}`
-                    : `편집 가능: ${object.text}`}
-                </title>
-              </polygon>
-            )),
-          )}
+          <ActionContextMenu label="텍스트 블록 작업" items={textMenu(menuTarget)}>
+            <g>
+              {targets.flatMap((object) =>
+                (object.group?.kind === "paragraph"
+                  ? [object.screenBounds]
+                  : (object.group?.screenBounds ?? [object.screenBounds])
+                ).map((bounds, index) => (
+                  <polygon
+                    key={`${object.id}-${index}`}
+                    role="button"
+                    tabIndex={disabled ? -1 : 0}
+                    aria-label={`${object.group ? (mode === "sentence" ? "문장" : "블록") : "텍스트"} 선택: ${object.text}`}
+                    aria-pressed={selected?.id === object.id}
+                    aria-disabled={disabled}
+                    points={bounds.map((p) => p.join(",")).join(" ")}
+                    visibility={
+                      (inlineEditing || moving) && selected?.id === object.id ? "hidden" : undefined
+                    }
+                    strokeDasharray={selected?.id === object.id ? undefined : "5 4"}
+                    data-editability={
+                      !object.editBlocked
+                        ? "editable"
+                        : object.fontChangeBlocked === null || object.group?.canFlow
+                          ? "font-required"
+                          : "blocked"
+                    }
+                    className={`cursor-text fill-transparent stroke-1 outline-none hover:fill-emerald-500/5 hover:stroke-2 focus:stroke-2 ${!object.editBlocked ? "stroke-emerald-600" : object.fontChangeBlocked === null || object.group?.canFlow ? "stroke-amber-600" : "stroke-stone-400"}`}
+                    onContextMenu={() => {
+                      if (!disabled) {
+                        setMenuTarget(object);
+                        if (selected?.id !== object.id) onSelect(object);
+                      }
+                    }}
+                    onClick={(event) => clickText(object, event)}
+                    onPointerDown={(event) => {
+                      if (
+                        disabled ||
+                        inlineEditing ||
+                        event.button !== 0 ||
+                        (object.fontChangeBlocked !== null && !object.group?.canFlow) ||
+                        !nearBorder(event, bounds)
+                      )
+                        return;
+                      event.stopPropagation();
+                      event.preventDefault();
+                      event.currentTarget.setPointerCapture(event.pointerId);
+                      iconDrag.current = { x: event.clientX, y: event.clientY, target: object };
+                      onSelect(object);
+                    }}
+                    onPointerMove={(event) => {
+                      event.currentTarget.style.cursor =
+                        !disabled && nearBorder(event, bounds) ? "move" : "text";
+                      if (iconDrag.current?.target.id === object.id) {
+                        event.stopPropagation();
+                        movePreview(
+                          event.clientX - iconDrag.current.x,
+                          event.clientY - iconDrag.current.y,
+                        );
+                      }
+                    }}
+                    onPointerUp={finishBorderDrag}
+                    onPointerCancel={() => {
+                      iconDrag.current = null;
+                      resetMove();
+                    }}
+                    onLostPointerCapture={() => {
+                      if (iconDrag.current) {
+                        iconDrag.current = null;
+                        resetMove();
+                      }
+                    }}
+                    onDoubleClick={(event) => {
+                      event.stopPropagation();
+                      point.current = { x: event.clientX, y: event.clientY };
+                      if (!disabled) onBeginEdit(object);
+                    }}
+                    onKeyDown={(event) => {
+                      if (!disabled && (event.key === "Enter" || event.key === " ")) {
+                        event.preventDefault();
+                        point.current = null;
+                        if (event.key === "Enter") onBeginEdit(object);
+                        else onSelect(object);
+                      }
+                    }}
+                  >
+                    <title>
+                      {object.editBlocked
+                        ? `${object.fontChangeBlocked === null || object.group?.canFlow ? "글꼴 전환 후 편집 가능" : object.editBlocked}: ${object.text}`
+                        : `편집 가능: ${object.text}`}
+                    </title>
+                  </polygon>
+                )),
+              )}
+            </g>
+          </ActionContextMenu>
           {multiple.map((t) => (
             <polygon
               key={`multi-${t.id}`}
@@ -683,85 +741,87 @@ export const TextPage = memo(function TextPage({
         </svg>
       )}
       {editingEnabled && selected && !inlineEditing && (
-        <div
-          ref={moveTarget}
-          role="button"
-          tabIndex={0}
-          aria-label="선택 블록 이동"
-          aria-disabled={disabled || !canMove}
-          className="absolute z-10 cursor-move border-2 border-emerald-600 bg-emerald-500/5 outline-none focus:ring-2 focus:ring-emerald-300"
-          style={{
-            left,
-            top,
-            transform: `translate(${offset.x}px, ${offset.y}px)`,
-            width,
-            height,
-            touchAction: "none",
-          }}
-          onClick={(event) => {
-            if (Math.hypot(offset.x, offset.y) < 3) clickText(selected, event);
-          }}
-          onDoubleClick={(event) => {
-            point.current = { x: event.clientX, y: event.clientY };
-            if (!disabled) onBeginEdit(selected);
-          }}
-          onKeyDown={(event) => {
-            if (event.key === "Enter" && !disabled) {
+        <ActionContextMenu label="텍스트 블록 작업" items={textMenu(selected)}>
+          <div
+            ref={moveTarget}
+            role="button"
+            tabIndex={0}
+            aria-label="선택 블록 이동"
+            aria-disabled={disabled || !canMove}
+            className="absolute z-10 cursor-move border-2 border-emerald-600 bg-emerald-500/5 outline-none focus:ring-2 focus:ring-emerald-300"
+            style={{
+              left,
+              top,
+              transform: `translate(${offset.x}px, ${offset.y}px)`,
+              width,
+              height,
+              touchAction: "none",
+            }}
+            onClick={(event) => {
+              if (Math.hypot(offset.x, offset.y) < 3) clickText(selected, event);
+            }}
+            onDoubleClick={(event) => {
+              point.current = { x: event.clientX, y: event.clientY };
+              if (!disabled) onBeginEdit(selected);
+            }}
+            onKeyDown={(event) => {
+              if (event.key === "Enter" && !disabled) {
+                event.preventDefault();
+                onBeginEdit(selected);
+              }
+            }}
+            onPointerDown={(event) => {
+              if (disabled || !canMove || !source || event.button !== 0) return;
+              if (!pdfDelta(source, 1, 1)) return;
               event.preventDefault();
-              onBeginEdit(selected);
-            }
-          }}
-          onPointerDown={(event) => {
-            if (disabled || !canMove || !source || event.button !== 0) return;
-            if (!pdfDelta(source, 1, 1)) return;
-            event.preventDefault();
-            event.currentTarget.setPointerCapture(event.pointerId);
-            drag.current = { x: event.clientX, y: event.clientY, pointer: event.pointerId };
-          }}
-          onPointerMove={(event) => {
-            const d = drag.current;
-            if (d && d.pointer === event.pointerId)
-              movePreview(event.clientX - d.x, event.clientY - d.y);
-          }}
-          onPointerCancel={() => {
-            drag.current = null;
-            resetMove();
-          }}
-          onLostPointerCapture={() => {
-            if (drag.current) {
+              event.currentTarget.setPointerCapture(event.pointerId);
+              drag.current = { x: event.clientX, y: event.clientY, pointer: event.pointerId };
+            }}
+            onPointerMove={(event) => {
+              const d = drag.current;
+              if (d && d.pointer === event.pointerId)
+                movePreview(event.clientX - d.x, event.clientY - d.y);
+            }}
+            onPointerCancel={() => {
               drag.current = null;
               resetMove();
-            }
-          }}
-          onPointerUp={(event) => {
-            const d = drag.current;
-            drag.current = null;
-            if (!d || d.pointer !== event.pointerId) return;
-            if (Math.hypot(event.clientX - d.x, event.clientY - d.y) < 3) {
-              resetMove();
-              return;
-            }
-            movePreview(event.clientX - d.x, event.clientY - d.y);
-            const { x, y } = snapped.current;
-            requester.current?.requestEnd();
-            requester.current = null;
-            const delta = source && pdfDelta(source, x, y);
-            if (Math.hypot(x, y) > 3 && delta)
-              void Promise.resolve(onMove(...delta)).then((ok) => {
-                if (ok === false) resetMove();
-              }, resetMove);
-            else resetMove();
-          }}
-        >
-          {["-left-1 -top-1", "-right-1 -top-1", "-left-1 -bottom-1", "-right-1 -bottom-1"].map(
-            (position) => (
-              <span
-                key={position}
-                className={`pointer-events-none absolute h-2 w-2 rounded-full bg-emerald-600 ${position}`}
-              />
-            ),
-          )}
-        </div>
+            }}
+            onLostPointerCapture={() => {
+              if (drag.current) {
+                drag.current = null;
+                resetMove();
+              }
+            }}
+            onPointerUp={(event) => {
+              const d = drag.current;
+              drag.current = null;
+              if (!d || d.pointer !== event.pointerId) return;
+              if (Math.hypot(event.clientX - d.x, event.clientY - d.y) < 3) {
+                resetMove();
+                return;
+              }
+              movePreview(event.clientX - d.x, event.clientY - d.y);
+              const { x, y } = snapped.current;
+              requester.current?.requestEnd();
+              requester.current = null;
+              const delta = source && pdfDelta(source, x, y);
+              if (Math.hypot(x, y) > 3 && delta)
+                void Promise.resolve(onMove(...delta)).then((ok) => {
+                  if (ok === false) resetMove();
+                }, resetMove);
+              else resetMove();
+            }}
+          >
+            {["-left-1 -top-1", "-right-1 -top-1", "-left-1 -bottom-1", "-right-1 -bottom-1"].map(
+              (position) => (
+                <span
+                  key={position}
+                  className={`pointer-events-none absolute h-2 w-2 rounded-full bg-emerald-600 ${position}`}
+                />
+              ),
+            )}
+          </div>
+        </ActionContextMenu>
       )}
       <span ref={inertDragTarget} className="hidden" />
       {editingEnabled && selected && !inlineEditing && canMove && (
@@ -848,7 +908,8 @@ export const TextPage = memo(function TextPage({
         </div>
       )}
       <MessageDialog
-        title="편집 화면 안내"
+        kind="error"
+        title="편집 화면 준비 오류"
         message={active ? backgroundError : null}
         onRetry={() => setPrepareAttempt((value) => value + 1)}
       />
@@ -859,111 +920,6 @@ export const TextPage = memo(function TextPage({
         >
           원본 글꼴과 편집 화면을 준비하고 있습니다…
         </p>
-      )}
-      {editingEnabled && !inlineEditing && multiple.length > 1 && (
-        <div className="absolute left-2 top-2 z-30 rounded-lg border bg-white p-2 shadow">
-          <IconButton
-            icon={Combine}
-            label={`${multiple.length}개 블록 함께 편집`}
-            disabled={disabled || !merge}
-            onClick={() => {
-              if (merge) {
-                setMultiple([]);
-                onBeginEdit(merge);
-              }
-            }}
-          />
-          {!merge && (
-            <p className="text-xs text-stone-500">완전한 편집 가능 문단 블록끼리 선택해 주세요.</p>
-          )}
-          <IconButton icon={X} label="취소" onClick={() => setMultiple([])} />
-        </div>
-      )}
-      {editingEnabled && !inlineEditing && hovered && (
-        <div
-          onMouseEnter={keepHover}
-          onMouseLeave={() => {
-            if (!iconDrag.current) setHovered(null);
-          }}
-          className="absolute z-30 flex rounded border border-stone-200 bg-white shadow"
-          style={{
-            left: Math.max(
-              0,
-              Math.min(page.width - 80, Math.min(...hovered.screenBounds.map((p) => p[0]))),
-            ),
-            top: Math.min(page.height - 32, Math.max(...hovered.screenBounds.map((p) => p[1]))),
-          }}
-        >
-          <Button
-            variant="plain"
-            size="bare"
-            aria-label="블록 옮기기"
-            title="드래그하여 옮기기"
-            disabled={disabled || (!!hovered.fontChangeBlocked && !hovered.group?.canFlow)}
-            className="cursor-move px-3 py-1 disabled:opacity-30"
-            style={{ touchAction: "none" }}
-            onPointerDown={(e) => {
-              e.preventDefault();
-              e.currentTarget.setPointerCapture(e.pointerId);
-              iconDrag.current = { x: e.clientX, y: e.clientY, target: hovered };
-              onSelect(hovered);
-            }}
-            onPointerMove={(e) => {
-              const d = iconDrag.current;
-              if (d) movePreview(e.clientX - d.x, e.clientY - d.y);
-            }}
-            onPointerUp={(e) => {
-              const d = iconDrag.current;
-              iconDrag.current = null;
-              if (!d) return;
-              if (Math.hypot(e.clientX - d.x, e.clientY - d.y) < 3) {
-                resetMove();
-                return;
-              }
-              movePreview(e.clientX - d.x, e.clientY - d.y);
-              const { x, y } = snapped.current;
-              requester.current?.requestEnd();
-              requester.current = null;
-              const source = d.target.group
-                ? page.text.objects.find((o) => o.id === d.target.group!.runs[0].object)
-                : d.target;
-              const delta = source && pdfDelta(source, x, y);
-              if (delta && Math.hypot(x, y) > 3)
-                void Promise.resolve(onMove(...delta, d.target)).then((ok) => {
-                  if (ok === false) resetMove();
-                }, resetMove);
-              else resetMove();
-            }}
-            onPointerCancel={() => {
-              iconDrag.current = null;
-              resetMove();
-            }}
-            onLostPointerCapture={() => {
-              if (iconDrag.current) {
-                iconDrag.current = null;
-                resetMove();
-              }
-            }}
-          >
-            <Move size={16} aria-hidden="true" />
-          </Button>
-          <Button
-            variant="plain"
-            size="bare"
-            aria-label="블록 삭제"
-            title="삭제 (실행 취소 가능)"
-            disabled={
-              disabled || !(hovered.group?.canFlow || (!hovered.group && !hovered.editBlocked))
-            }
-            onClick={() => {
-              onDelete(hovered);
-              setHovered(null);
-            }}
-            className="px-3 py-1 text-red-700 disabled:opacity-30"
-          >
-            <Trash2 size={16} aria-hidden="true" />
-          </Button>
-        </div>
       )}
       {editingEnabled &&
         selected?.group?.canFlow &&
@@ -987,6 +943,7 @@ export const TextPage = memo(function TextPage({
               touchAction: "none",
             }}
             onPointerDown={(event) => {
+              if (event.button !== 0) return;
               event.stopPropagation();
               event.preventDefault();
               event.currentTarget.setPointerCapture(event.pointerId);

@@ -219,6 +219,74 @@ fn native_load_render_navigate_cache_release_and_errors() {
         .render("edit".into(), source.clone(), 0, 800)
         .unwrap();
     assert_eq!(first.text.objects.len(), 2);
+    // Text masking must match a real PDF text edit in the preview and the flattened copy.
+    let text_masks = vec![pdf_core::security::TextMask {
+        page: 0,
+        object: first.text.objects[0].id,
+        start: 6,
+        end: 11,
+    }];
+    let preview_png = engine
+        .preview_text_masks("edit".into(), 0, 0, text_masks.clone())
+        .unwrap();
+    let reference = engine
+        .render("reference".into(), source.clone(), 0, 1600)
+        .unwrap();
+    engine
+        .edit(
+            "reference".into(),
+            reference.state.revision,
+            EditAction::Replace {
+                page: 0,
+                object: first.text.objects[0].id,
+                text: "Hello **".into(),
+            },
+        )
+        .unwrap();
+    let reference = engine
+        .render("reference".into(), source.clone(), 0, 1600)
+        .unwrap();
+    assert_eq!(reference.text.objects[0].text.trim_end(), "Hello **");
+    assert_eq!(preview_png, reference.png);
+    let masked = directory.join("text-masked.pdf");
+    engine
+        .save_masked_copy_with_text("edit".into(), 0, vec![], text_masks, masked.clone())
+        .unwrap();
+    // Compare the stored RGB pixels directly, before a PDF viewer resamples them.
+    let copy = lopdf::Document::load(&masked).unwrap();
+    let page_id = copy.get_pages()[&1];
+    let resources = copy.get_page_resources(page_id).unwrap().0.unwrap();
+    let image_id = resources
+        .get(b"XObject")
+        .unwrap()
+        .as_dict()
+        .unwrap()
+        .get(b"PageImage")
+        .unwrap()
+        .as_reference()
+        .unwrap();
+    let rgb = copy
+        .get_object(image_id)
+        .unwrap()
+        .as_stream()
+        .unwrap()
+        .get_plain_content()
+        .unwrap();
+    let mut decoder = png::Decoder::new(Cursor::new(preview_png))
+        .read_info()
+        .unwrap();
+    let mut rgba = vec![0; decoder.output_buffer_size().unwrap()];
+    decoder.next_frame(&mut rgba).unwrap();
+    assert_eq!(rgb.len(), rgba.len() / 4 * 3);
+    assert!(rgb
+        .chunks_exact(3)
+        .zip(rgba.chunks_exact(4))
+        .all(|(a, b)| a == &b[..3]));
+    let exported = engine
+        .render("masked-text".into(), masked, 0, 1600)
+        .unwrap();
+    assert!(exported.text.objects.is_empty());
+    assert_eq!(fs::read(&source).unwrap(), original);
     // A 300px editor page must retain tools even after a same-size thumbnail request.
     let thumbnail = engine
         .render_thumbnail("edit".into(), source.clone(), 0, 300)
@@ -376,6 +444,22 @@ fn native_load_render_navigate_cache_release_and_errors() {
     let reopened = engine.render("saved".into(), output, 0, 800).unwrap();
     assert_eq!(reopened.text.objects[0].text, "Hello PDF");
     assert_eq!(reopened.png, edited.png);
+    let stars = directory.join("stars.pdf");
+    let masked = engine
+        .edit("saved".into(), reopened.state.revision, replace("** PDF"))
+        .unwrap();
+    engine
+        .edit(
+            "saved".into(),
+            masked.revision,
+            EditAction::Save {
+                path: stars.clone(),
+            },
+        )
+        .unwrap();
+    let copy = engine.render("stars".into(), stars, 0, 800).unwrap();
+    assert_eq!(copy.text.objects[0].text, "** PDF");
+    assert_eq!(copy.text.objects[1].text, "Second Line");
     assert!(!fs::read_dir(&directory).unwrap().any(|entry| entry
         .unwrap()
         .file_name()

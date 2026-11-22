@@ -21,6 +21,8 @@ pub(super) fn run(library: PathBuf, font_directory: PathBuf, receiver: Receiver<
     while let Ok(request) = receiver.recv() {
         let session_id = match &request {
             Request::ExtractText { id, .. }
+            | Request::MaskPreview { id, .. }
+            | Request::MaskedCopy { id, .. }
             | Request::CopyGraphic { id, .. }
             | Request::Background { id, .. }
             | Request::Font { id, .. }
@@ -28,17 +30,77 @@ pub(super) fn run(library: PathBuf, font_directory: PathBuf, receiver: Receiver<
             | Request::Render { id, .. }
             | Request::Release(id) => id.clone(),
         };
-        let (mut current, mut history, mut watermark_pages, mut recovered) =
+        let (mut current, mut history, mut watermark_pages, mut recovered, mut signatures) =
             documents.remove(&session_id).unwrap_or_else(|| {
                 (
                     None::<(String, PdfDocument<'_>)>,
                     History::default(),
                     Vec::new(),
                     false,
+                    Vec::new(),
                 )
             });
         let mut cache = caches.remove(&session_id).unwrap_or_default();
         match request {
+            Request::MaskedCopy {
+                revision,
+                masks,
+                text_masks,
+                path,
+                reply,
+                ..
+            } => {
+                let result = (|| {
+                    let (_, document) = current
+                        .as_ref()
+                        .filter(|_| history.state.revision == revision)
+                        .ok_or(PreviewError::StaleObject)?;
+                    let pdfium = pdfium
+                        .as_ref()
+                        .map_err(|_| PreviewError::LibraryUnavailable)?;
+                    if masks.is_empty() && text_masks.is_empty()
+                        || masks.len() + text_masks.len() > 2048
+                    {
+                        return Err(PreviewError::EditFailed);
+                    }
+                    crate::security::with_text_masks(
+                        pdfium,
+                        document,
+                        &text_masks,
+                        &font_directory,
+                        |candidate| crate::security::export(pdfium, candidate, &masks, &path),
+                    )
+                })();
+                let _ = reply.send(result);
+            }
+            Request::MaskPreview {
+                revision,
+                page,
+                text_masks,
+                reply,
+                ..
+            } => {
+                let result = (|| {
+                    let (_, document) = current
+                        .as_ref()
+                        .filter(|_| history.state.revision == revision)
+                        .ok_or(PreviewError::StaleObject)?;
+                    let pdfium = pdfium
+                        .as_ref()
+                        .map_err(|_| PreviewError::LibraryUnavailable)?;
+                    if text_masks.iter().any(|m| m.page != page) {
+                        return Err(PreviewError::InvalidPage);
+                    }
+                    crate::security::with_text_masks(
+                        pdfium,
+                        document,
+                        &text_masks,
+                        &font_directory,
+                        |candidate| Ok(render_page(candidate, page, 1600, false)?.png),
+                    )
+                })();
+                let _ = reply.send(result);
+            }
             Request::ExtractText {
                 id,
                 revision,
@@ -299,7 +361,8 @@ pub(super) fn run(library: PathBuf, font_directory: PathBuf, receiver: Receiver<
                             return Err(PreviewError::TooLarge);
                         }
                         watermark_pages = crate::content_stream::watermarks::pages(&bytes);
-                        let (document, was_recovered) = ensemble.open(pdfium, bytes)?;
+                        let (document, was_recovered) = ensemble.open(pdfium, &bytes)?;
+                        signatures = crate::security::inspect(&document, &bytes);
                         recovered = was_recovered;
                         if document.pages().is_empty() {
                             return Err(PreviewError::InvalidDocument);
@@ -320,6 +383,9 @@ pub(super) fn run(library: PathBuf, font_directory: PathBuf, receiver: Receiver<
                     rendered.state = history.state.clone();
                     rendered.recovered = recovered;
                     if include_text {
+                        rendered.signatures = signatures.clone();
+                    }
+                    if include_text {
                         rendered.text.watermark_pages = watermark_pages.clone();
                         if watermark_pages.contains(&page) {
                             rendered.text.watermark_settings =
@@ -335,7 +401,10 @@ pub(super) fn run(library: PathBuf, font_directory: PathBuf, receiver: Receiver<
         }
         if current.is_some() {
             caches.insert(session_id.clone(), cache);
-            documents.insert(session_id, (current, history, watermark_pages, recovered));
+            documents.insert(
+                session_id,
+                (current, history, watermark_pages, recovered, signatures),
+            );
         }
     }
 }

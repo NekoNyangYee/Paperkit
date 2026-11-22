@@ -1,6 +1,6 @@
 import { Button } from "@/shared/ui/button";
 import { useEffect, useState } from "react";
-import { LoaderCircle, RotateCcw, X, ZoomIn } from "lucide-react";
+import { LoaderCircle, RotateCcw, ZoomIn } from "lucide-react";
 import { errorMessage } from "@/shared/desktop/files";
 import { renderThumbnail, releasePreview } from "@/shared/pdf/api";
 import { useFileStore } from "@/features/file-input/model/file-store";
@@ -9,7 +9,6 @@ import {
   DialogContent,
   DialogTitle,
   DialogDescription,
-  DialogClose,
   DialogTrigger,
 } from "@/shared/ui/dialog";
 import { IconButton } from "@/shared/ui/icon-button";
@@ -72,9 +71,6 @@ export function FileThumbnail({ fileId }: { fileId: string }) {
             <DialogContent className="flex h-[90dvh] w-[min(92vw,1100px)] flex-col bg-stone-100">
               <div className="mb-2 flex items-center justify-between gap-4">
                 <DialogTitle className="text-sm font-medium">PDF 미리보기</DialogTitle>
-                <DialogClose asChild>
-                  <IconButton icon={X} label="미리보기 닫기" />
-                </DialogClose>
               </div>
               <DialogDescription className="sr-only">
                 선택한 PDF의 첫 페이지 확대 미리보기
@@ -105,7 +101,12 @@ export function FileThumbnail({ fileId }: { fileId: string }) {
           </span>
         )}
       </div>
-      <MessageDialog title="미리보기 안내" message={error} onRetry={() => setRetry((n) => n + 1)} />
+      <MessageDialog
+        kind="error"
+        title="미리보기 오류"
+        message={error}
+        onRetry={() => setRetry((n) => n + 1)}
+      />
     </div>
   );
 }

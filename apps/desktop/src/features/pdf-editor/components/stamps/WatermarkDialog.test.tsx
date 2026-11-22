@@ -7,6 +7,8 @@ import { invoke } from "@tauri-apps/api/core";
 import { watermarkPng, watermarkSource } from "@/features/pdf-editor/lib/stamps/watermark";
 import type { EditAction, PreviewPage } from "@/shared/pdf/types";
 import placeholderUrl from "@/features/pdf-editor/lib/stamps/watermark-placeholder.svg";
+import { useAuthStore } from "@/features/auth/model/auth-store";
+import { useToolStore } from "@/features/library/model/tool-store";
 
 vi.mock("@tauri-apps/api/core", () => ({ invoke: vi.fn() }));
 
@@ -17,7 +19,57 @@ vi.mock("@/features/pdf-editor/lib/stamps/watermark", async (importOriginal) => 
 }));
 afterEach(() => {
   cleanup();
+  useAuthStore.setState({ session: null });
+  useToolStore.setState(useToolStore.getInitialState());
   vi.resetAllMocks();
+});
+
+it("loads a saved watermark or image into the current settings without applying it", async () => {
+  useAuthStore.setState({ session: { user: { id: "owner" } } as never });
+  useToolStore.setState({
+    owner: "owner",
+    load: vi.fn(),
+    tools: [
+      { id: "mark", name: "공유용", kind: "watermark", content: "외부 검토용", createdAt: 1 },
+      {
+        id: "img",
+        name: "회사 로고",
+        kind: "image",
+        content: "data:image/png;base64,AQID",
+        createdAt: 2,
+      },
+    ],
+  });
+  const apply = vi.fn();
+  render(<WatermarkDialog page={page} onApply={apply} onClose={vi.fn()} />);
+  fireEvent.click(screen.getByRole("button", { name: "내 도구함 · 워터마크" }));
+  expect(
+    screen
+      .getByRole("dialog")
+      .contains(screen.getByRole("region", { name: "내 도구함 · 워터마크" })),
+  ).toBe(true);
+  fireEvent.click(await screen.findByRole("button", { name: "공유용" }));
+  await waitFor(() =>
+    expect((screen.getByLabelText("워터마크 텍스트") as HTMLTextAreaElement).value).toBe(
+      "외부 검토용",
+    ),
+  );
+  slide("워터마크 투명도", 40);
+  fireEvent.click(screen.getByRole("radio", { name: "이미지" }));
+  fireEvent.click(screen.getByRole("button", { name: "내 도구함 · 이미지" }));
+  fireEvent.click(await screen.findByRole("button", { name: "회사 로고" }));
+  await waitFor(() =>
+    expect(watermarkSource).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "image",
+        image: expect.objectContaining({ name: "회사 로고" }),
+      }),
+    ),
+  );
+  expect(
+    screen.getByRole("slider", { name: "워터마크 투명도" }).getAttribute("aria-valuenow"),
+  ).toBe("40");
+  expect(apply).not.toHaveBeenCalled();
 });
 const page: PreviewPage = {
   fileId: "doc",
@@ -53,7 +105,7 @@ it("retries a failed background without closing the dialog or losing watermark i
   fireEvent.change(input, { target: { value: "작성 중인 문구" } });
   const alert = await screen.findByRole("alert");
   expect(alert.textContent).not.toContain("private");
-  fireEvent.click(screen.getByRole("button", { name: "미리보기 다시 불러오기" }));
+  fireEvent.click(screen.getByRole("button", { name: "다시 시도" }));
   await waitFor(() => expect(screen.queryByRole("alert")).toBeNull());
   expect(input.value).toBe("작성 중인 문구");
   expect(onApply).not.toHaveBeenCalled();
@@ -94,11 +146,11 @@ it("restores the applied text settings and switch after closing and reopening", 
   slide("워터마크 각도", 15);
   slide("워터마크 크기", 75);
   await waitFor(() =>
-    expect(
-      (screen.getByRole("button", { name: "워터마크 적용" }) as HTMLButtonElement).disabled,
-    ).toBe(false),
+    expect((screen.getByRole("button", { name: "적용" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    ),
   );
-  fireEvent.click(screen.getByRole("button", { name: "워터마크 적용" }));
+  fireEvent.click(screen.getByRole("button", { name: "적용" }));
   await waitFor(() => expect(onApply).toHaveBeenCalledOnce());
   const action = onApply.mock.calls[0]![0] as Extract<EditAction, { kind: "addWatermark" }>;
   view.unmount();
@@ -193,11 +245,11 @@ it("previews and applies a date beside text, and restores the original text when
       ),
     );
     await waitFor(() =>
-      expect(
-        (screen.getByRole("button", { name: "워터마크 적용" }) as HTMLButtonElement).disabled,
-      ).toBe(false),
+      expect((screen.getByRole("button", { name: "적용" }) as HTMLButtonElement).disabled).toBe(
+        false,
+      ),
     );
-    fireEvent.click(screen.getByRole("button", { name: "워터마크 적용" }));
+    fireEvent.click(screen.getByRole("button", { name: "적용" }));
     await screen.findByRole("alert");
     expect(watermarkPng).toHaveBeenLastCalledWith(
       expect.objectContaining({ text: "내부 검토용", date: "2026-10-25" }),
@@ -237,11 +289,11 @@ it("previews text over the real page and submits all pages as one watermark acti
     ),
   );
   await waitFor(() =>
-    expect(
-      (screen.getByRole("button", { name: "워터마크 적용" }) as HTMLButtonElement).disabled,
-    ).toBe(false),
+    expect((screen.getByRole("button", { name: "적용" }) as HTMLButtonElement).disabled).toBe(
+      false,
+    ),
   );
-  fireEvent.click(screen.getByRole("button", { name: "워터마크 적용" }));
+  fireEvent.click(screen.getByRole("button", { name: "적용" }));
   await waitFor(() =>
     expect(onApply).toHaveBeenCalledWith({
       kind: "addWatermark",
@@ -270,9 +322,7 @@ it("selects an image, targets the current page, and preserves settings after a r
   fireEvent.click(await screen.findByRole("radio", { name: "이미지" }));
   await screen.findByRole("img", { name: "워터마크 기본 이미지 미리보기" });
   expect(screen.queryByRole("alert")).toBeNull();
-  expect(
-    (screen.getByRole("button", { name: "워터마크 적용" }) as HTMLButtonElement).disabled,
-  ).toBe(true);
+  expect((screen.getByRole("button", { name: "적용" }) as HTMLButtonElement).disabled).toBe(true);
   const file = new File(["png"], "brand.png", { type: "image/png" });
   fireEvent.change(screen.getByLabelText("워터마크 이미지 파일"), { target: { files: [file] } });
   await selectOption(
@@ -280,7 +330,7 @@ it("selects an image, targets the current page, and preserves settings after a r
     "현재 페이지 (3페이지)",
   );
   await screen.findByRole("img", { name: "워터마크 미리보기" });
-  fireEvent.click(screen.getByRole("button", { name: "워터마크 적용" }));
+  fireEvent.click(screen.getByRole("button", { name: "적용" }));
   await screen.findByRole("alert");
   expect(onClose).not.toHaveBeenCalled();
   expect(onApply).toHaveBeenLastCalledWith({
@@ -299,7 +349,7 @@ it("selects an image, targets the current page, and preserves settings after a r
   expect(watermarkSource).toHaveBeenLastCalledWith(
     expect.objectContaining({ image: file, kind: "image", text: "" }),
   );
-  fireEvent.click(screen.getByRole("button", { name: "워터마크 적용" }));
+  fireEvent.click(screen.getByRole("button", { name: "적용" }));
   await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
 });
 
@@ -328,7 +378,7 @@ it("clears text immediately on image mode, previews a placeholder and waits for 
   );
   expect(screen.queryByLabelText("워터마크 텍스트")).toBeNull();
   expect(screen.queryByRole("alert")).toBeNull();
-  fireEvent.click(screen.getByRole("button", { name: "워터마크 적용" }));
+  fireEvent.click(screen.getByRole("button", { name: "적용" }));
   expect(onApply).not.toHaveBeenCalled();
   expect(watermarkPng).not.toHaveBeenCalled();
   fireEvent.click(screen.getByRole("radio", { name: "텍스트" }));
@@ -374,7 +424,7 @@ it("never mixes a late text preview with the selected image when applying over a
   expect(
     (screen.getByRole("img", { name: "워터마크 적용 전 페이지" }) as HTMLImageElement).src,
   ).toBe("data:image/png;base64,Q0xFQU4=");
-  fireEvent.click(screen.getByRole("button", { name: "워터마크 적용" }));
+  fireEvent.click(screen.getByRole("button", { name: "적용" }));
   await waitFor(() => expect(onApply).toHaveBeenCalledOnce());
   expect(watermarkPng).toHaveBeenCalledWith(
     expect.objectContaining({ kind: "image", text: "", image: file, angle: 0 }),
@@ -413,9 +463,9 @@ it("ignores a stale generated preview and prevents cancellation or duplicate edi
   fireEvent.change(screen.getByLabelText("워터마크 텍스트"), { target: { value: "최종" } });
   await screen.findByRole("img", { name: "워터마크 미리보기" });
   complete({ ...source, png: [9], url: "data:image/png;base64,T0xE" });
-  fireEvent.click(screen.getByRole("button", { name: "워터마크 적용" }));
+  fireEvent.click(screen.getByRole("button", { name: "적용" }));
   await waitFor(() => expect(onApply).toHaveBeenCalledOnce());
-  fireEvent.click(screen.getByRole("button", { name: "적용 중…" }));
+  fireEvent.click(screen.getByRole("button", { name: "적용" }));
   fireEvent.keyDown(document, { key: "Escape" });
   expect(onApply).toHaveBeenLastCalledWith(expect.objectContaining({ png: [1, 2, 3] }));
   expect(watermarkPng).toHaveBeenLastCalledWith(expect.objectContaining({ text: "최종" }), source);
@@ -444,7 +494,7 @@ it("updates all sliders immediately without removing or regenerating the preview
   expect(preview.style.width).not.toBe(originalWidth);
   expect(watermarkSource).toHaveBeenCalledOnce();
   expect(watermarkPng).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "워터마크 적용" }));
+  fireEvent.click(screen.getByRole("button", { name: "적용" }));
   await waitFor(() => expect(onApply).toHaveBeenCalledOnce());
   expect(watermarkPng).toHaveBeenLastCalledWith(
     expect.objectContaining({ opacity: 77, angle: 48 }),
@@ -506,9 +556,7 @@ it("resets text, color, selected image, sliders and page scope to their initial 
   );
   fireEvent.click(screen.getByRole("radio", { name: "이미지" }));
   expect(screen.queryByText("selected.png")).toBeNull();
-  expect(
-    (screen.getByRole("button", { name: "워터마크 적용" }) as HTMLButtonElement).disabled,
-  ).toBe(true);
+  expect((screen.getByRole("button", { name: "적용" }) as HTMLButtonElement).disabled).toBe(true);
 });
 
 it("starts disabled and keeps settings when reset is cancelled", async () => {
@@ -516,9 +564,7 @@ it("starts disabled and keeps settings when reset is cancelled", async () => {
   render(<WatermarkDialog page={page} onApply={onApply} onClose={vi.fn()} />);
   expect(screen.queryByRole("radio")).toBeNull();
   expect(screen.queryByRole("img", { name: "워터마크 미리보기" })).toBeNull();
-  expect(
-    (screen.getByRole("button", { name: "워터마크 제거" }) as HTMLButtonElement).disabled,
-  ).toBe(true);
+  expect((screen.getByRole("button", { name: "삭제" }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(screen.getByRole("switch", { name: "워터마크 사용" }));
   await screen.findByRole("img", { name: "워터마크 미리보기" });
   fireEvent.change(screen.getByLabelText("워터마크 텍스트"), { target: { value: "보관할 내용" } });
@@ -560,12 +606,12 @@ it("previews removal without old watermarks, targets the chosen scope and keeps 
     screen.getByRole("combobox", { name: "워터마크 적용 범위" }),
     "현재 페이지 (3페이지)",
   );
-  fireEvent.click(screen.getByRole("button", { name: "워터마크 제거" }));
+  fireEvent.click(screen.getByRole("button", { name: "삭제" }));
   await screen.findByRole("alert");
   expect(onClose).not.toHaveBeenCalled();
   expect(onApply).toHaveBeenLastCalledWith({ kind: "removeWatermark", page: 2 });
   expect(watermarkPng).not.toHaveBeenCalled();
-  fireEvent.click(screen.getByRole("button", { name: "워터마크 제거" }));
+  fireEvent.click(screen.getByRole("button", { name: "삭제" }));
   await waitFor(() => expect(onClose).toHaveBeenCalledOnce());
 });
 

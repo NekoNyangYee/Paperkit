@@ -115,7 +115,7 @@ export function VersionDialog({
                 <Button
                   variant="ghost"
                   type="button"
-                  aria-label="새 버전 알림 닫기"
+                  aria-label="알림 숨기기"
                   className="rounded p-0.5 text-stone-400 hover:bg-stone-100"
                   onClick={() => setDismissedTag(release.tag)}
                 >
@@ -131,13 +131,13 @@ export function VersionDialog({
                 className="mt-3 rounded-lg bg-emerald-800 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-900"
                 onClick={() => changeOpen(true)}
               >
-                업데이트 확인
+                <RefreshCw size={16} aria-hidden="true" /> 업데이트 확인
               </Button>
             </div>
           )}
       </div>
       <Dialog open={open} onOpenChange={changeOpen}>
-        <DialogContent className="w-[min(92vw,520px)] p-6">
+        <DialogContent className="w-[min(92vw,520px)] border border-stone-300 p-6">
           <div className="flex items-center justify-between">
             <div className="flex items-center gap-3">
               <img src={appIcon} alt="Paperkit 로고" className="size-10" />
@@ -167,7 +167,6 @@ export function VersionDialog({
                 </svg>
               </Button>
             </div>
-            <IconButton icon={X} label="버전 창 닫기" onClick={() => changeOpen(false)} />
           </div>
           <DialogDescription className="mt-2 text-sm text-stone-500">
             현재 버전 {version ?? (isTauri() ? "확인 중…" : "데스크톱 앱에서 확인 가능")}

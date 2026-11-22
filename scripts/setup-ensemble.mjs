@@ -1,8 +1,7 @@
 // All runtime assets are local. No PDF, image or OCR text is sent to a service.
 import { createHash } from "node:crypto";
-import { mkdir, readFile, writeFile, copyFile, cp, readdir } from "node:fs/promises";
+import { mkdir, readFile, writeFile, copyFile, cp } from "node:fs/promises";
 import { execFileSync } from "node:child_process";
-import { createRequire } from "node:module";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
@@ -31,11 +30,7 @@ async function verified(url, name, expected) {
   return destination;
 }
 
-if (
-  !process.argv.includes("--ocr-only") &&
-  process.platform === "win32" &&
-  process.arch === "x64"
-) {
+if (process.platform === "win32" && process.arch === "x64") {
   const archive = await verified(manifest.qpdf.url, "qpdf.zip", manifest.qpdf.sha256);
   const entries = execFileSync("tar", ["-tf", archive], { encoding: "utf8" }).trim().split(/\r?\n/);
   if (
@@ -70,20 +65,25 @@ if (
   console.log(`qpdf ${manifest.qpdf.version} ready (verified SHA-256).`);
 }
 
-if (process.argv.includes("--native-only")) process.exit(0);
-
-const output = path.join(root, "apps/desktop/public/ocr");
+if (process.platform !== "win32" || process.arch !== "x64") process.exit(0);
+const output = path.join(root, "apps/desktop/src-tauri/resources/ocr");
 await mkdir(output, { recursive: true });
-const require = createRequire(path.join(root, "apps/desktop/package.json"));
-const engine = path.dirname(require.resolve("tesseract.js/package.json"));
-const core = path.dirname(
-  createRequire(path.join(engine, "package.json")).resolve("tesseract.js-core/package.json"),
+const archive = await verified(
+  manifest.tesseract.url,
+  "tesseractocr.5.5.2.nupkg",
+  manifest.tesseract.sha256,
 );
-await copyFile(path.join(engine, "dist/worker.min.js"), path.join(output, "worker.min.js"));
-await copyFile(path.join(engine, "LICENSE.md"), path.join(output, "LICENSE-tesseract-js.md"));
-for (const name of await readdir(core)) {
-  if (name.endsWith(".wasm") || name.endsWith(".wasm.js") || name.startsWith("LICENSE"))
-    await copyFile(path.join(core, name), path.join(output, name));
+for (const file of ["tesseract.exe", "tesseract55.dll", "leptonica-1.85.0.dll"]) {
+  execFileSync("tar", ["-xf", archive, "-C", cache, "x64/" + file]);
+  await copyFile(path.join(cache, "x64", file), path.join(output, file));
+}
+// Ship the MSVC runtime beside the executable, including on clean Windows machines.
+const runtime = path.join(root, "apps/desktop/src-tauri/resources/qpdf/bin");
+for (const name of ["msvcp140.dll", "vcruntime140.dll", "vcruntime140_1.dll"]) {
+  await copyFile(path.join(runtime, name), path.join(output, name));
+}
+for (const [name, url, hash] of manifest.tesseract.licenses) {
+  await copyFile(await verified(url, name, hash), path.join(output, name + ".txt"));
 }
 for (const language of ["eng", "kor"]) {
   const model = await verified(
@@ -97,4 +97,4 @@ await writeFile(
   path.join(output, "MODEL-SOURCE.txt"),
   `Tesseract tessdata_fast (Apache-2.0)\nhttps://github.com/tesseract-ocr/tessdata_fast/tree/${manifest.models.revision}\n`,
 );
-console.log("Local English/Korean OCR ready (verified SHA-256).");
+console.log("Native Tesseract and Korean/English models ready (verified SHA-256).");

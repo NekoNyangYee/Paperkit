@@ -21,6 +21,25 @@ beforeEach(() => {
 afterEach(cleanup);
 const props = { fileId: "one", pageCount: 100, selectedPage: 0, onSelect: vi.fn(), open: true };
 
+it("rotates the right-clicked thumbnail and protects the last page", async () => {
+  mocks.renderPage.mockResolvedValue({ imageUrl: "data:image/png;base64,ONE" });
+  const onPageAction = vi.fn();
+  const view = render(
+    <PageSidebar {...props} pageCount={2} editable onPageAction={onPageAction} />,
+  );
+  fireEvent.contextMenu(screen.getByRole("button", { name: "2페이지로 이동" }));
+  fireEvent.click(await screen.findByRole("menuitem", { name: "페이지 회전" }));
+  expect(onPageAction).toHaveBeenCalledWith("rotate", 1);
+  view.rerender(<PageSidebar {...props} pageCount={1} editable onPageAction={onPageAction} />);
+  fireEvent.keyDown(screen.getByRole("button", { name: "1페이지로 이동" }), {
+    key: "F10",
+    shiftKey: true,
+  });
+  expect(
+    (await screen.findByRole("menuitem", { name: "페이지 삭제" })).getAttribute("aria-disabled"),
+  ).toBe("true");
+});
+
 it("groups duplicate rotate and delete actions and disables them while editing is busy", async () => {
   mocks.renderPage.mockResolvedValue({ imageUrl: "data:image/png;base64,ONE" });
   const onPageAction = vi.fn();

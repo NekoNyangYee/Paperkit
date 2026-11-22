@@ -67,9 +67,16 @@ it("opens the system browser and exchanges the native callback code using PKCE",
       }),
     }),
   );
-  expect(mocks.openUrl).toHaveBeenCalledWith(
-    expect.stringContaining("https://project.supabase.co/auth/v1/authorize"),
-  );
+  expect(mocks.openUrl).not.toHaveBeenCalled();
+  expect(mocks.invoke).toHaveBeenCalledWith("finish_google_login", {
+    id: "attempt-a",
+    authorizeUrl:
+      "https://project.supabase.co/auth/v1/authorize?provider=google&code_challenge=test",
+  });
+  expect(mocks.invoke).toHaveBeenCalledWith("complete_google_login", {
+    id: "attempt-a",
+    success: true,
+  });
   expect(mocks.auth.exchangeCodeForSession).toHaveBeenCalledWith("authorization-code");
   expect(store.useAuthStore.getState().session?.user.id).toBe(session.user.id);
   expect(store.useAuthStore.getState().busy).toBe(false);

@@ -11,6 +11,7 @@ use crate::{editing::EditState, text::PageText};
 pub use client::Paperframe;
 
 pub struct RenderedPage {
+    pub signatures: Vec<crate::security::SignatureReport>,
     pub recovered: bool,
     pub page_count: i32,
     pub page_index: i32,

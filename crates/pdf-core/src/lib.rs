@@ -8,6 +8,8 @@ pub mod document;
 mod editing;
 pub mod engine;
 pub mod fonts;
+pub mod ocr;
+pub mod security;
 pub mod text;
 
 // Preserve existing public module paths for downstream consumers.

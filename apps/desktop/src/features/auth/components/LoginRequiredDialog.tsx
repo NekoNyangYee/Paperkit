@@ -1,4 +1,4 @@
-import { LogIn, UserRound, X } from "lucide-react";
+import { LogIn, LoaderCircle, UserRound } from "lucide-react";
 import { Button } from "@/shared/ui/button";
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from "@/shared/ui/dialog";
 import {
@@ -10,10 +10,12 @@ import {
 export function LoginRequiredDialog({
   open,
   feature,
+  description,
   onClose,
 }: {
   open: boolean;
   feature: string;
+  description?: string;
   onClose: () => void;
 }) {
   const { ready, busy, signingIn, error, dismissError } = useAuthStore();
@@ -37,21 +39,19 @@ export function LoginRequiredDialog({
           <DialogTitle className="text-base font-semibold text-stone-900">
             로그인이 필요합니다
           </DialogTitle>
-          <DialogDescription className="sr-only">
-            {feature} 기능은 로그인 후 이용할 수 있습니다.
+          <DialogDescription className={description ? "text-sm text-stone-600" : "sr-only"}>
+            {description ?? `${feature} 기능은 로그인 후 이용할 수 있습니다.`}
           </DialogDescription>
         </div>
         <div className="space-y-2">
           <Button
             className="w-full gap-2"
-            disabled={!signingIn && (busy || !ready)}
-            onClick={() => void (signingIn ? cancelGoogleLogin() : signInWithGoogle())}
+            disabled={signingIn || busy || !ready}
+            aria-busy={signingIn}
+            onClick={() => void signInWithGoogle()}
           >
-            {signingIn ? <X size={17} /> : <LogIn size={17} />}
-            {signingIn ? "로그인 취소" : "Google로 로그인"}
-          </Button>
-          <Button variant="ghost" className="w-full" onClick={close}>
-            닫기
+            {signingIn ? <LoaderCircle className="animate-spin" size={17} /> : <LogIn size={17} />}
+            Google로 로그인
           </Button>
         </div>
         {error && (

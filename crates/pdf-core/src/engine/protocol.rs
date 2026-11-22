@@ -6,6 +6,21 @@ use crate::{
 };
 use std::{path::PathBuf, sync::mpsc::SyncSender};
 pub(super) enum Request {
+    MaskedCopy {
+        id: String,
+        revision: u64,
+        masks: Vec<crate::security::Mask>,
+        text_masks: Vec<crate::security::TextMask>,
+        path: PathBuf,
+        reply: SyncSender<Result<(), PreviewError>>,
+    },
+    MaskPreview {
+        id: String,
+        revision: u64,
+        page: i32,
+        text_masks: Vec<crate::security::TextMask>,
+        reply: SyncSender<Result<Vec<u8>, PreviewError>>,
+    },
     ExtractText {
         id: String,
         revision: u64,

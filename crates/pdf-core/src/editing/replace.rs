@@ -168,7 +168,7 @@ pub(super) fn replace_group(
     Ok(bytes)
 }
 
-pub(super) fn replace(
+pub(crate) fn replace(
     pdfium: &Pdfium,
     original: &[u8],
     index: i32,

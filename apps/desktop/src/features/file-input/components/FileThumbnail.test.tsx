@@ -36,6 +36,8 @@ it("decodes a sharp image before enabling preview and opens without a second ren
     );
     expect(mocks.render).toHaveBeenCalledExactlyOnceWith("preview", 0, 1600);
     fireEvent.keyDown(modal, { key: "Escape" });
+    expect(screen.getByRole("dialog")).toBe(modal);
+    fireEvent.click(screen.getByRole("button", { name: "취소" }));
     await waitFor(() => expect(screen.queryByRole("dialog")).toBeNull());
     await waitFor(() => expect(document.activeElement).toBe(trigger));
     fireEvent.click(trigger);

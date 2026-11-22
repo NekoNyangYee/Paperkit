@@ -1,4 +1,5 @@
 import { TitleBar } from "@/app/layout/TitleBar";
+import { TabContextMenu } from "./layout/TabContextMenu";
 import { LibraryHome } from "@/features/library/components/LibraryHome";
 import { LibrarySync } from "@/features/library/components/LibrarySync";
 import { PdfPreview } from "@/features/pdf-editor/components/preview/PdfPreview";
@@ -19,37 +20,39 @@ export function App() {
     if (openedFileId) setVisited((previous) => new Set(previous).add(activeTabId));
   }, [activeTabId, openedFileId]);
   return (
-    <div className="flex h-screen flex-col overflow-hidden">
-      <TitleBar />
-      <LibrarySync />
-      <div className="min-h-0 flex-1 overflow-auto" inert={changingAccount}>
-        {tabs.map(
-          (tab) =>
-            tab.file &&
-            (tab.id === activeTabId || visited.has(tab.id)) && (
-              <div
-                key={tab.id}
-                role="tabpanel"
-                id={`panel-${tab.id}`}
-                aria-labelledby={`tab-${tab.id}`}
-                hidden={tab.id !== activeTabId}
-                className="h-full"
-              >
-                <PdfPreview file={tab.file} active={tab.id === activeTabId && !changingAccount} />
-              </div>
-            ),
-        )}
-        {!(file && file.id === openedFileId) && (
-          <main
-            role="tabpanel"
-            id={`panel-${activeTabId}`}
-            aria-labelledby={`tab-${activeTabId}`}
-            className="flex min-h-full flex-col px-6 py-7 sm:px-12"
-          >
-            <LibraryHome />
-          </main>
-        )}
+    <TabContextMenu tabId={activeTabId}>
+      <div className="flex h-screen flex-col overflow-hidden">
+        <TitleBar />
+        <LibrarySync />
+        <div className="min-h-0 flex-1 overflow-auto" inert={changingAccount}>
+          {tabs.map(
+            (tab) =>
+              tab.file &&
+              (tab.id === activeTabId || visited.has(tab.id)) && (
+                <div
+                  key={tab.id}
+                  role="tabpanel"
+                  id={`panel-${tab.id}`}
+                  aria-labelledby={`tab-${tab.id}`}
+                  hidden={tab.id !== activeTabId}
+                  className="h-full"
+                >
+                  <PdfPreview file={tab.file} active={tab.id === activeTabId && !changingAccount} />
+                </div>
+              ),
+          )}
+          {!(file && file.id === openedFileId) && (
+            <main
+              role="tabpanel"
+              id={`panel-${activeTabId}`}
+              aria-labelledby={`tab-${activeTabId}`}
+              className="flex min-h-full flex-col px-6 py-7 sm:px-12"
+            >
+              <LibraryHome />
+            </main>
+          )}
+        </div>
       </div>
-    </div>
+    </TabContextMenu>
   );
 }

@@ -29,7 +29,7 @@ vi.mock("@/features/pdf-editor/components/stamps/SignatureDialog", () => ({
           if (await onApply([1, 2, 3])) onClose();
         }}
       >
-        서명 선택
+        선택
       </button>
     </div>
   ),
@@ -138,10 +138,10 @@ it.each(["image", "signature"] as const)(
       fireEvent.change(editor.getByLabelText("바꿀 이미지"), { target: { files: [file] } });
       await waitFor(() => expect(mocks.image).toHaveBeenCalledWith(file));
     } else {
-      fireEvent.click(editor.getByRole("button", { name: "서명 다시 그리기" }));
+      fireEvent.click(editor.getByRole("button", { name: "다시 그리기" }));
       fireEvent.click(
         within(await screen.findByRole("dialog", { name: "전자서명" })).getByRole("button", {
-          name: "서명 선택",
+          name: "선택",
         }),
       );
       await waitFor(() => expect(screen.queryByRole("dialog", { name: "전자서명" })).toBeNull());
@@ -267,7 +267,7 @@ it("automatically recovers both lists when the same account receives a renewed t
 
 it("keeps document removal behind confirmation and clears records on sign-out", async () => {
   render(<DocumentLibrary />);
-  fireEvent.click(await screen.findByRole("button", { name: "견적서.pdf 문서함에서 제거" }));
+  fireEvent.click(await screen.findByRole("button", { name: "견적서.pdf 문서함에서 삭제" }));
   const dialog = await screen.findByRole("alertdialog");
   expect(mocks.request).not.toHaveBeenCalled();
   fireEvent.click(within(dialog).getByRole("button", { name: "취소" }));
@@ -339,7 +339,7 @@ it("saves a reusable text tool and applies an existing image only through the ed
   fireEvent.change(screen.getByLabelText("내용"), {
     target: { value: "첨부 자료를 확인해 주세요." },
   });
-  fireEvent.click(screen.getByRole("button", { name: "보관하기" }));
+  fireEvent.click(screen.getByRole("button", { name: "저장" }));
   await waitFor(() =>
     expect(mocks.request).toHaveBeenCalledWith(
       "/library/tools",
@@ -368,7 +368,29 @@ it("saves a reusable text tool and applies an existing image only through the ed
   await waitFor(() => expect(onClose).toHaveBeenCalled());
 });
 
-it("filters cards by kind and copies text from the card without triggering actions on delete", async () => {
+it("opens a shelf item's details and navigates back through its category to create a matching tool", async () => {
+  render(<ToolShelf />);
+  fireEvent.click(await screen.findByRole("button", { name: /안내 문구/ }));
+  const detail = within(screen.getByRole("dialog", { name: tool.name }));
+  expect(detail.getByText(tool.content)).toBeTruthy();
+  fireEvent.click(detail.getByRole("button", { name: "문구" }));
+  const add = within(screen.getByRole("dialog")).getByRole("button", { name: "도구 추가" });
+  await waitFor(() => expect(add.hasAttribute("disabled")).toBe(false));
+  fireEvent.click(add);
+  const create = within(screen.getByRole("dialog", { name: "도구 추가" }));
+  expect(
+    within(create.getByRole("group", { name: "도구 종류" }))
+      .getByRole("button", { name: "문구" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+  fireEvent.click(within(create.getByRole("navigation")).getByRole("button", { name: "문구" }));
+  expect(
+    within(screen.getByRole("group", { name: "도구 필터" }))
+      .getByRole("button", { name: "문구" })
+      .getAttribute("aria-pressed"),
+  ).toBe("true");
+});
+it("filters cards by kind and copies text from detail without triggering actions on delete", async () => {
   const image = {
     ...tool,
     id: "image",
@@ -398,11 +420,13 @@ it("filters cards by kind and copies text from the card without triggering actio
   fireEvent.click(
     within(await screen.findByRole("alertdialog")).getByRole("button", { name: "취소" }),
   );
-  fireEvent.click(screen.getByRole("button", { name: `${tool.name} 문구 복사` }));
+  fireEvent.click(screen.getByRole("button", { name: `${tool.name} 상세 보기` }));
+  const detail = within(screen.getByRole("dialog", { name: tool.name }));
+  fireEvent.click(detail.getByRole("button", { name: "복사" }));
   await waitFor(() => expect(writeText).toHaveBeenCalledWith(tool.content));
   expect(await screen.findByText("복사됨")).toBeTruthy();
-  expect(screen.queryByText("문구 복사")).toBeNull();
-  fireEvent.click(within(filters).getByRole("button", { name: "전체" }));
+  expect(screen.queryByText("복사")).toBeNull();
+  fireEvent.click(detail.getByRole("button", { name: "내 도구함" }));
   expect(screen.getByText("로고")).toBeTruthy();
   expect(screen.getByText("내 서명")).toBeTruthy();
 });
@@ -413,18 +437,16 @@ it("saves a drawn signature as a distinct reusable tool", async () => {
   const kinds = screen.getByRole("group", { name: "도구 종류" });
   fireEvent.click(within(kinds).getByRole("button", { name: "전자서명" }));
   fireEvent.change(screen.getByLabelText("이름"), { target: { value: "내 서명" } });
-  expect((screen.getByRole("button", { name: "보관하기" }) as HTMLButtonElement).disabled).toBe(
-    true,
-  );
+  expect((screen.getByRole("button", { name: "저장" }) as HTMLButtonElement).disabled).toBe(true);
   fireEvent.click(screen.getByRole("button", { name: "서명 그리기" }));
   fireEvent.click(
     within(await screen.findByRole("dialog", { name: "전자서명" })).getByRole("button", {
-      name: "서명 선택",
+      name: "선택",
     }),
   );
   await waitFor(() => expect(screen.queryByRole("dialog", { name: "전자서명" })).toBeNull());
   expect(screen.getByAltText("보관할 서명 미리보기")).toBeTruthy();
-  fireEvent.click(screen.getByRole("button", { name: "보관하기" }));
+  fireEvent.click(screen.getByRole("button", { name: "저장" }));
   await waitFor(() =>
     expect(mocks.request).toHaveBeenCalledWith(
       "/library/tools",

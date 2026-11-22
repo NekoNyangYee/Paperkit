@@ -146,7 +146,7 @@ it("cancels a request when the close button is clicked", async () => {
   render(<VersionDialog />);
   fireEvent.click(screen.getByRole("button", { name: "앱 버전 확인" }));
   await waitFor(() => expect(signal).toBeDefined());
-  fireEvent.click(screen.getByRole("button", { name: "버전 창 닫기" }));
+  fireEvent.click(screen.getByRole("button", { name: "취소" }));
   expect(signal?.aborted).toBe(true);
 });
 
@@ -164,7 +164,7 @@ it("checks at startup and opens the updater from the notification below the info
   await screen.findByRole("dialog");
   expect(screen.queryByRole("status", { name: "새 버전 알림" })).toBeNull();
   await screen.findByText(/새 버전이 있습니다/);
-  fireEvent.click(screen.getByRole("button", { name: "버전 창 닫기" }));
+  fireEvent.click(screen.getByRole("button", { name: "취소" }));
   expect(screen.queryByRole("status", { name: "새 버전 알림" })).toBeNull();
 });
 
@@ -174,7 +174,7 @@ it("can dismiss the startup notification while keeping the info button available
     vi.fn().mockResolvedValue({ ok: true, json: async () => ({ tag_name: "v0.3.0" }) }),
   );
   render(<VersionDialog />);
-  fireEvent.click(await screen.findByRole("button", { name: "새 버전 알림 닫기" }));
+  fireEvent.click(await screen.findByRole("button", { name: "알림 숨기기" }));
   expect(screen.queryByRole("status", { name: "새 버전 알림" })).toBeNull();
   expect(screen.getByRole("button", { name: "앱 버전 확인" })).toBeTruthy();
 });

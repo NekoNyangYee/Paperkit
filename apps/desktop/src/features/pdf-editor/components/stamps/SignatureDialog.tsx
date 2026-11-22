@@ -1,10 +1,14 @@
+import { ActionButton } from "@/shared/ui/action-button";
 import { useEffect, useRef, useState } from "react";
 import SignaturePad from "signature_pad";
-import { X, RotateCcw } from "lucide-react";
+import { RotateCcw } from "lucide-react";
 import { Dialog, DialogContent, DialogTitle, DialogDescription } from "@/shared/ui/dialog";
 import { userErrorMessage } from "@/shared/lib/errors";
-import { IconButton } from "@/shared/ui/icon-button";
 import { Button } from "@/shared/ui/button";
+import { SavedToolPicker } from "@/features/library/components/SavedToolPicker";
+import type { LibraryTool } from "@/features/library/lib/api";
+import { toolPngBytes } from "@/features/library/lib/tool-image";
+import { DialogBreadcrumbs, type DialogCrumb } from "@/shared/ui/dialog-breadcrumbs";
 import { useConfirmDialog } from "@/shared/ui/confirm-dialog";
 import { useDialogClose } from "@/shared/ui/use-dialog-close";
 import { canvasContext, signaturePng } from "@/features/pdf-editor/lib/stamps/canvas";
@@ -14,22 +18,25 @@ export function SignatureDialog({
   onApply,
   applyError,
   purpose = "insert",
+  parents,
 }: {
   onClose: () => void;
   onApply: (png: number[]) => Promise<boolean>;
   applyError?: string | null;
   purpose?: "insert" | "tool";
+  parents?: DialogCrumb[];
 }) {
   const { open, close } = useDialogClose(onClose);
   const resetDialog = useConfirmDialog({
+    kind: "reset",
     title: "서명 초기화",
     description: "그린 서명을 지우고 다시 그릴까요?",
-    confirmLabel: "서명 지우기",
   });
   const [canvas, setCanvas] = useState<HTMLCanvasElement | null>(null);
   const pad = useRef<SignaturePad | null>(null);
   const applying = useRef(false);
   const [empty, setEmpty] = useState(true);
+  const [savedSignature, setSavedSignature] = useState<LibraryTool | null>(null);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState<string | null>(null);
   useEffect(() => {
@@ -83,16 +90,34 @@ export function SignatureDialog({
         if (!value && !applying.current && !resetDialog.isOpen) close();
       }}
     >
-      <DialogContent className="flex h-[min(520px,calc(100dvh-64px))] w-[min(94vw,680px)] flex-col gap-3 overflow-hidden p-5">
+      <DialogContent
+        cancelDisabled={pending}
+        className="flex h-[min(520px,calc(100dvh-64px))] w-[min(94vw,680px)] flex-col gap-3 overflow-hidden p-5"
+      >
         <div className="flex shrink-0 items-center justify-between">
-          <DialogTitle className="text-lg font-semibold">전자서명</DialogTitle>
-          <IconButton icon={X} label="전자서명 창 닫기" disabled={pending} onClick={close} />
+          {parents ? (
+            <DialogBreadcrumbs parents={parents} title="전자서명" disabled={pending} />
+          ) : (
+            <DialogTitle className="text-lg font-semibold">전자서명</DialogTitle>
+          )}
         </div>
         <DialogDescription className="sr-only">
           {purpose === "tool"
             ? "그린 서명을 선택한 뒤 도구함에 보관할 수 있습니다."
             : "아래에 서명해 주세요. 생성하면 현재 페이지에 들어가며, 이동하거나 크기를 조절할 수 있습니다."}
         </DialogDescription>
+        {purpose === "insert" && (
+          <SavedToolPicker
+            inline
+            kind="signature"
+            label="내 도구함 · 전자서명"
+            disabled={pending}
+            onPick={(tool) => {
+              setError(null);
+              setSavedSignature(tool);
+            }}
+          />
+        )}
         <div className="relative min-h-0 flex-1 overflow-hidden rounded-xl border border-stone-300 bg-white">
           <div className="pointer-events-none absolute inset-x-6 bottom-12 border-b border-dashed border-stone-200" />
           <canvas
@@ -103,13 +128,25 @@ export function SignatureDialog({
             className="relative block size-full touch-none"
             style={{ pointerEvents: pending ? "none" : undefined }}
           />
+          {savedSignature && (
+            <img
+              src={savedSignature.content}
+              alt={savedSignature.name}
+              className="absolute inset-0 size-full bg-white object-contain p-5"
+            />
+          )}
         </div>
-        <div className="flex shrink-0 justify-end text-xs text-stone-500">
+        <div className="flex shrink-0 items-center justify-end gap-2 text-xs text-stone-500">
           <Button
             variant="ghost"
             size="sm"
-            disabled={pending || empty}
+            disabled={pending || (!savedSignature && empty)}
             onClick={async () => {
+              if (savedSignature) {
+                setSavedSignature(null);
+                setError(null);
+                return;
+              }
               if (!(await resetDialog.confirm())) return;
               pad.current?.clear();
               setEmpty(true);
@@ -117,7 +154,7 @@ export function SignatureDialog({
             }}
           >
             <RotateCcw size={14} />
-            다시 그리기
+            {savedSignature ? "직접 그리기" : "다시 그리기"}
           </Button>
         </div>
         {(applyError || error) && (
@@ -126,18 +163,21 @@ export function SignatureDialog({
           </p>
         )}
         <div className="flex shrink-0 justify-end gap-2">
-          <Button variant="outline" disabled={pending} onClick={close}>
-            취소
-          </Button>
-          <Button
-            disabled={pending || empty}
+          <ActionButton
+            busy={pending}
+            action={purpose === "tool" ? "select" : "apply"}
+            disabled={!savedSignature && empty}
             onClick={async () => {
-              if (!canvas || pad.current?.isEmpty() || applying.current) return;
+              if (!canvas || (!savedSignature && pad.current?.isEmpty()) || applying.current)
+                return;
               applying.current = true;
               setPending(true);
               setError(null);
               try {
-                if (await onApply(signaturePng(canvas).png)) close();
+                const png = savedSignature
+                  ? toolPngBytes(savedSignature.content)
+                  : signaturePng(canvas).png;
+                if (await onApply(png)) close();
                 else
                   setError(
                     purpose === "tool"
@@ -151,15 +191,7 @@ export function SignatureDialog({
                 setPending(false);
               }
             }}
-          >
-            {pending
-              ? purpose === "tool"
-                ? "처리 중…"
-                : "서명 넣는 중…"
-              : purpose === "tool"
-                ? "서명 선택"
-                : "서명 생성"}
-          </Button>
+          />
         </div>
       </DialogContent>
       {resetDialog.dialog}
